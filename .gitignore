@@ -1,0 +1,100 @@
+# =============================================================================
+# ARM (ReportForge AI) — Production Git Ignore Configuration
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1. CRITICAL SECRETS & ENVIRONMENT VARIABLES (NEVER PUSH TO GITHUB)
+# -----------------------------------------------------------------------------
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+*.secret*
+.secret*
+*.key
+*.pem
+*.pfx
+
+# -----------------------------------------------------------------------------
+# 2. PYTHON VIRTUAL ENVIRONMENT & COMPILED ARTIFACTS
+# -----------------------------------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# -----------------------------------------------------------------------------
+# 3. NODE.JS & NEXT.JS BUILD OUTPUTS
+# -----------------------------------------------------------------------------
+node_modules/
+apps/web/node_modules/
+.next/
+apps/web/.next/
+out/
+apps/web/out/
+.pnp/
+.pnp.js
+*.tsbuildinfo
+supabase/.temp/
+
+# -----------------------------------------------------------------------------
+# 4. PRIVATE STORAGE, UPLOADED TEMPLATES & GENERATED ARTIFACTS
+# -----------------------------------------------------------------------------
+.storage/
+generated_images/
+.wrangler/
+cloudflared.exe
+*.exe
+
+# -----------------------------------------------------------------------------
+# 5. TESTING, TYPE CHECKING & LINTING CACHES
+# -----------------------------------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.eslintcache
+
+# -----------------------------------------------------------------------------
+# 6. LOCAL SCRATCH SCRIPTS & TEMPORARY TEST DOCUMENTS
+# -----------------------------------------------------------------------------
+scratch/
+scratch_*
+test_*.docx
+test_*_saved.docx
+tmp_*.docx
+*.log
+
+# -----------------------------------------------------------------------------
+# 7. OPERATING SYSTEM & EDITOR FILES
+# -----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
