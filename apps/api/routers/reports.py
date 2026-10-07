@@ -189,6 +189,26 @@ def generate_full_report(req: GenerateReportRequest):
 
         source_template_path, resolved_template_id = resolve_selected_template_path(effective_template_id)
 
+        # DIAGNOSTIC LOGGING: Verify template_id and resolved file for report generation
+        diag_report_log = (
+            f"\nReport generation:\n"
+            f"received_template_id = {effective_template_id}\n"
+            f"Report generation:\n"
+            f"resolved_template_path = {source_template_path}\n"
+        )
+        print(diag_report_log)
+        logger.info(diag_report_log)
+
+        # HARD VALIDATION: Report generation strictly requires a .docx template
+        if not source_template_path.lower().endswith(".docx"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Report generation requires a DOCX template, but resolved template is '{source_template_path}'. "
+                    f"The original PDF must never be passed into the existing DOCX report-generation engine."
+                )
+            )
+
         # [3] Template loaded
         current_stage = "Template loaded"
         logger.info(f"[3] Template loaded: {resolved_template_id} ({source_template_path})")

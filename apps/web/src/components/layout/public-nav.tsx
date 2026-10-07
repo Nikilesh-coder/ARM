@@ -3,11 +3,13 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, X, ArrowRight } from "lucide-react";
+import { Menu, X, ArrowRight, LayoutDashboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/lib/auth-context";
 
 const NAV_LINKS = [
   { href: "/", label: "Home" },
+  { href: "/video", label: "Product Video" },
   { href: "/features", label: "Features" },
   { href: "/how-it-works", label: "How It Works" },
   { href: "/pricing", label: "Pricing" },
@@ -17,6 +19,7 @@ const NAV_LINKS = [
 export function PublicNav() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { isAuthenticated, isLoading } = useAuth();
 
   return (
     <header className="sticky top-0 z-50 border-b border-zinc-200 dark:border-zinc-850 bg-white/80 dark:bg-black/80 backdrop-blur-md transition-colors duration-300">
@@ -58,17 +61,27 @@ export function PublicNav() {
 
         {/* Auth CTA */}
         <div className="hidden sm:flex items-center space-x-3">
-          <Link
-            href="/login"
-            className="text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white px-3 py-1.5 transition-colors"
-          >
-            Log in
-          </Link>
-          <Link href="/signup">
-            <Button variant="primary" size="sm" className="text-xs">
-              Get Started <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
-            </Button>
-          </Link>
+          {!isLoading && isAuthenticated ? (
+            <Link href="/app">
+              <Button variant="primary" size="sm" className="text-xs">
+                Open Workspace <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
+              </Button>
+            </Link>
+          ) : (
+            <>
+              <Link
+                href="/login"
+                className="text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white px-3 py-1.5 transition-colors"
+              >
+                Log in
+              </Link>
+              <Link href="/signup">
+                <Button variant="primary" size="sm" className="text-xs">
+                  Get Started <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
+                </Button>
+              </Link>
+            </>
+          )}
         </div>
 
         {/* Mobile Hamburger */}
@@ -101,16 +114,26 @@ export function PublicNav() {
             ))}
           </div>
           <div className="pt-3 border-t border-zinc-200 dark:border-zinc-850 flex flex-col gap-2">
-            <Link href="/login" onClick={() => setMobileOpen(false)}>
-              <Button variant="outline" className="w-full text-xs">
-                Log in
-              </Button>
-            </Link>
-            <Link href="/signup" onClick={() => setMobileOpen(false)}>
-              <Button variant="primary" className="w-full text-xs">
-                Get Started
-              </Button>
-            </Link>
+            {!isLoading && isAuthenticated ? (
+              <Link href="/app" onClick={() => setMobileOpen(false)}>
+                <Button variant="primary" className="w-full text-xs">
+                  Open Workspace <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
+                </Button>
+              </Link>
+            ) : (
+              <>
+                <Link href="/login" onClick={() => setMobileOpen(false)}>
+                  <Button variant="outline" className="w-full text-xs">
+                    Log in
+                  </Button>
+                </Link>
+                <Link href="/signup" onClick={() => setMobileOpen(false)}>
+                  <Button variant="primary" className="w-full text-xs">
+                    Get Started
+                  </Button>
+                </Link>
+              </>
+            )}
           </div>
         </div>
       )}

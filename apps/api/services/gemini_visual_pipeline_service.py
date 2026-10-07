@@ -320,63 +320,80 @@ class GeminiVisualPipelineService:
         project_title = cls._normalize_str(project_title)
         combined = f"{heading} {matter} {project_title}".lower()
 
-        # Domain-aware entity catalog
-        OBJECT_CANDIDATES = [
-            # Irrigation
-            ("soil moisture sensor", ["soil moisture sensor", "moisture sensor", "sensor probe", "capacitive probe", "sensor"]),
-            ("plant roots", ["plant roots", "root zone", "roots", "plants", "crop"]),
-            ("drip irrigation tubing", ["drip irrigation", "drip lines", "drip tubing", "emitters", "water pipe"]),
-            ("solenoid water valve", ["solenoid", "valve", "water pump", "pump", "actuator"]),
-            ("agricultural soil", ["soil", "farmland", "field", "ground", "earth"]),
-            ("crop canopy", ["crop", "crops", "plants", "leaves", "vegetation", "canopy"]),
-            ("dry cracked soil", ["dry soil", "drought", "water scarcity", "cracked earth", "water loss"]),
-            ("traditional water furrow", ["flood irrigation", "furrow", "manual hose", "channel"]),
-            # Attendance
-            ("facial recognition camera", ["face recognition", "facial recognition", "attendance camera", "biometric camera", "cctv", "camera module"]),
-            ("biometric attendance terminal", ["biometric", "attendance terminal", "rfid scanner", "fingerprint", "attendance"]),
-            ("attendance ledger sheet", ["roll call", "attendance sheet", "register", "paper log"]),
-            ("classroom lecture hall", ["classroom", "lecture hall", "students", "campus", "school", "college"]),
-            # Healthcare
-            ("electronic health record terminal", ["ehr", "emr", "medical record", "patient file", "charting"]),
-            ("clinical patient monitor", ["patient monitor", "vital signs", "telemetry monitor", "oximeter", "ecg"]),
-            ("digital prescription interface", ["prescription", "pharmacy", "medication", "dosage"]),
-            ("hospital nursing station", ["nursing station", "hospital ward", "clinic desk", "hospital reception"]),
-            ("hospital consultation desk", ["doctor desk", "consultation room", "examination room", "physician desk"]),
-            # Cybersecurity
-            ("security operations center monitor", ["soc", "security operations", "cyber monitoring", "threat screen"]),
-            ("firewall gateway appliance", ["firewall", "gateway", "network appliance", "packet filter"]),
-            ("network packet inspection console", ["packet inspection", "wireshark", "deep packet", "network stream"]),
-            ("threat telemetry dashboard", ["threat dashboard", "incident response", "siem", "malware log"]),
-            ("server rack infrastructure", ["server rack", "datacenter", "servers", "mainframe"]),
-            # E-Commerce
-            ("e-commerce storefront display", ["storefront", "online store", "product catalog", "web shop"]),
-            ("digital shopping cart checkout interface", ["shopping cart", "checkout", "payment screen", "billing gateway"]),
-            ("warehouse inventory scanner", ["inventory scanner", "barcode scanner", "rfid warehouse", "pallet"]),
-            ("order fulfillment dispatch station", ["fulfillment", "order packaging", "dispatch counter", "logistics hub"]),
-            # Traffic
-            ("smart traffic signal controller", ["traffic signal", "traffic light", "signal controller", "intersection control"]),
-            ("traffic monitoring surveillance camera", ["traffic camera", "surveillance camera", "road camera", "cctv road"]),
-            ("vehicular flow sensor", ["vehicle sensor", "inductive loop", "traffic radar", "speed detector"]),
-            ("urban transit command console", ["traffic control center", "transit console", "urban mobility screen"]),
-            # Energy
-            ("solar photovoltaic inverter array", ["solar", "photovoltaic", "solar panel", "inverter"]),
-            ("smart energy storage battery", ["battery storage", "bess", "lithium battery", "accumulator"]),
-            ("grid telemetry monitoring panel", ["power grid", "substation", "grid telemetry", "distribution panel"]),
-            # Finance
-            ("financial transaction processing terminal", ["transaction terminal", "payment gateway", "banking terminal", "pos"]),
-            ("digital banking verification screen", ["banking dashboard", "ledger screen", "fraud check", "account balance"]),
-            # Robotics
-            ("autonomous mobile robot chassis", ["robot chassis", "amr", "agv", "mobile robot", "rover"]),
-            ("robotic sensor array with lidar", ["lidar", "ultrasonic sensor", "depth camera", "robot arm"]),
-            # Common Hardware
-            ("IoT microcontroller", ["esp32", "microcontroller", "iot controller", "edge node", "gateway", "lora", "raspberry pi"]),
+        # Domain-scoped entity catalogs to guarantee zero cross-domain leakage
+        DOMAIN_OBJECT_CATALOG = {
+            "irrigation": [
+                ("soil moisture sensor", ["soil moisture sensor", "moisture sensor", "sensor probe", "capacitive probe", "soil probe"]),
+                ("plant roots", ["plant roots", "root zone", "roots"]),
+                ("drip irrigation tubing", ["drip irrigation", "drip lines", "drip tubing", "emitters", "water pipe"]),
+                ("solenoid water valve", ["solenoid", "water valve", "water pump", "irrigation pump", "actuator"]),
+                ("agricultural soil", ["farmland soil", "crop soil", "cultivated earth"]),
+                ("crop canopy", ["crop canopy", "leaves", "vegetation", "canopy"]),
+                ("dry cracked soil", ["dry soil", "drought", "cracked earth", "water loss"]),
+                ("traditional water furrow", ["flood irrigation", "furrow", "manual hose", "channel"]),
+                ("solar-powered water pumping array", ["solar pump", "solar panel", "solar array", "photovoltaic"]),
+                ("field wireless IoT telemetry node", ["iot node", "lora", "telemetry node", "field gateway", "transmission node"]),
+                ("farming community and technicians", ["community", "farmer", "farmers", "training", "field inspection", "village"]),
+                ("soil salinity and moisture testing kit", ["salinity", "saline", "corrosion", "soil test", "strata"]),
+                ("smart mobile field management app", ["mobile app", "smartphone dashboard", "field app", "irrigation alert"]),
+                ("micro-sprinkler and drip lateral assembly", ["sprinkler", "drip lateral", "nozzle"]),
+                ("water storage cistern and pump station", ["cistern", "water reservoir", "pump station", "borewell"]),
+            ],
+            "attendance": [
+                ("facial recognition camera", ["face recognition", "facial recognition", "attendance camera", "biometric camera", "cctv", "camera module"]),
+                ("biometric attendance terminal", ["biometric", "attendance terminal", "rfid scanner", "fingerprint", "attendance"]),
+                ("attendance ledger sheet", ["roll call", "attendance sheet", "register", "paper log"]),
+                ("classroom lecture hall", ["classroom", "lecture hall", "students", "campus", "school", "college"]),
+            ],
+            "healthcare": [
+                ("electronic health record terminal", ["ehr", "emr", "medical record", "patient file", "charting"]),
+                ("clinical patient monitor", ["patient monitor", "vital signs", "telemetry monitor", "oximeter", "ecg"]),
+                ("digital prescription interface", ["prescription", "pharmacy", "medication", "dosage"]),
+                ("hospital nursing station", ["nursing station", "hospital ward", "clinic desk", "hospital reception"]),
+                ("hospital consultation desk", ["doctor desk", "consultation room", "examination room", "physician desk"]),
+            ],
+            "cybersecurity": [
+                ("security operations center monitor", ["soc", "security operations", "cyber monitoring", "threat screen"]),
+                ("firewall gateway appliance", ["firewall", "gateway", "network appliance", "packet filter"]),
+                ("network packet inspection console", ["packet inspection", "wireshark", "deep packet", "network stream"]),
+                ("threat telemetry dashboard", ["threat dashboard", "incident response", "siem", "malware log"]),
+                ("server rack infrastructure", ["server rack", "datacenter", "servers", "mainframe"]),
+            ],
+            "ecommerce": [
+                ("e-commerce storefront display", ["storefront", "online store", "product catalog", "web shop"]),
+                ("digital shopping cart checkout interface", ["shopping cart", "checkout", "payment screen", "billing gateway"]),
+                ("warehouse inventory scanner", ["inventory scanner", "barcode scanner", "rfid warehouse", "pallet"]),
+                ("order fulfillment dispatch station", ["fulfillment", "order packaging", "dispatch counter", "logistics hub"]),
+            ],
+            "traffic": [
+                ("smart traffic signal controller", ["traffic signal", "traffic light", "signal controller", "intersection control"]),
+                ("traffic monitoring surveillance camera", ["traffic camera", "surveillance camera", "road camera", "cctv road"]),
+                ("vehicular flow sensor", ["vehicle sensor", "inductive loop", "traffic radar", "speed detector"]),
+                ("urban transit command console", ["traffic control center", "transit console", "urban mobility screen"]),
+            ],
+            "energy": [
+                ("solar photovoltaic inverter array", ["solar", "photovoltaic", "solar panel", "inverter"]),
+                ("smart energy storage battery", ["battery storage", "bess", "lithium battery", "accumulator"]),
+                ("grid telemetry monitoring panel", ["power grid", "substation", "grid telemetry", "distribution panel"]),
+            ],
+            "finance": [
+                ("financial transaction processing terminal", ["transaction terminal", "payment gateway", "banking terminal", "pos"]),
+                ("digital banking verification screen", ["banking dashboard", "ledger screen", "fraud check", "account balance"]),
+            ],
+            "robotics": [
+                ("autonomous mobile robot chassis", ["robot chassis", "amr", "agv", "mobile robot", "rover"]),
+                ("robotic sensor array with lidar", ["lidar", "ultrasonic sensor", "depth camera", "robot arm"]),
+            ],
+        }
+        COMMON_OBJECT_CATALOG = [
+            ("IoT microcontroller", ["esp32", "microcontroller", "iot controller", "edge node", "raspberry pi"]),
             ("system workstation monitor", ["workstation", "computer monitor", "operator screen", "control console"]),
             ("weather station", ["weather", "ambient temperature", "humidity", "rain gauge"]),
-            ("solar panel", ["solar", "battery", "photovoltaic"]),
         ]
 
+        active_candidates = DOMAIN_OBJECT_CATALOG.get(domain, []) + COMMON_OBJECT_CATALOG
         found_objects = []
-        for canonical, triggers in OBJECT_CANDIDATES:
+        for canonical, triggers in active_candidates:
             if any(t in combined for t in triggers):
                 found_objects.append(canonical)
 
@@ -505,12 +522,15 @@ class GeminiVisualPipelineService:
             slide_matter=slide_matter,
         )
 
-        concepts, objects, subjects = cls.extract_matter_concepts(
+        matter_concepts, matter_objects, matter_subjects = cls.extract_matter_concepts(
             heading=slide_heading,
             matter=slide_matter,
             project_title=project_title,
             domain=domain,
         )
+        concepts = matter_concepts
+        objects = list(matter_objects)
+        subjects = list(matter_subjects)
 
         # Map to Canonical Visual Types according to ARM Specification
         if domain == "attendance":
@@ -695,10 +715,39 @@ class GeminiVisualPipelineService:
 
             else:
                 v_type = VisualType.REALISTIC_PHOTO
-                env = "agricultural field setting with dedicated technical precision irrigation hardware"
-                v_style = "clean academic photography, natural daytime lighting"
-                subjects = ["smart precision irrigation setup"]
-                objects = ["crop plants", "soil moisture hardware", "drip tubing"]
+                h_low = slide_heading.lower()
+                m_low = slide_matter.lower()
+                comb_low = f"{h_low} {m_low}"
+                if any(w in comb_low for w in ("solar", "photovoltaic", "clean energy", "sunlight power")):
+                    env = "sunlit agricultural field plot equipped with dedicated photovoltaic solar panels powering irrigation pumps"
+                    v_style = "natural crisp outdoor agricultural photography, bright daylight, clear depth of field"
+                    subjects = [f"solar-powered agricultural water pumping system for {slide_heading.lower()}"]
+                    objects = ["photovoltaic solar panels", "solar water pump controller", "clean drip lines", "crop rows"]
+                elif any(w in comb_low for w in ("community", "farmer", "stakeholder", "training", "social", "village")):
+                    env = "rural agricultural field setting with local farming community members and agricultural extension specialists"
+                    v_style = "authentic documentary agricultural photography, natural daylight, engaging perspective"
+                    subjects = [f"agricultural community engagement and field training for {slide_heading.lower()}"]
+                    objects = ["local farmers observing irrigation", "agronomist field tablet", "active drip lateral lines", "healthy crops"]
+                elif any(w in comb_low for w in ("salinity", "corrosion", "challenge", "strata", "limitation", "soil depth")):
+                    env = "agricultural test plot illustrating soil strata conditions and durable sensor resilience"
+                    v_style = "sharp macro-environmental photography, authentic soil textures, balanced natural lighting"
+                    subjects = [f"field instrumentation testing addressing {slide_heading.lower()}"]
+                    objects = ["soil moisture probe in varied soil strata", "weatherproof field enclosure", "crop monitoring equipment"]
+                elif any(w in comb_low for w in ("iot", "lora", "telemetry", "wireless", "gateway", "transmission", "antenna")):
+                    env = "precision agricultural field with pole-mounted wireless IoT telemetry gateway node overlooking crop beds"
+                    v_style = "clean technical outdoor photography, sharp focus on communication node, daytime sky"
+                    subjects = [f"wireless agricultural IoT telemetry network for {slide_heading.lower()}"]
+                    objects = ["pole-mounted IoT telemetry node", "field communication antenna", "soil sensors", "crop field"]
+                elif any(w in comb_low for w in ("mobile", "app", "dashboard", "alert", "interface", "remote")):
+                    env = "agricultural field plot with modern digital mobile monitoring interface displaying field vitals"
+                    v_style = "professional technology photography, crisp daylight focus on mobile field terminal"
+                    subjects = [f"smart precision agriculture mobile monitoring and control for {slide_heading.lower()}"]
+                    objects = ["mobile field telemetry screen", "irrigation control valve", "monitored crop plants"]
+                else:
+                    env = f"agricultural field setting with dedicated technical hardware for {slide_heading.lower()}"
+                    v_style = "clean academic photography, natural daytime lighting"
+                    subjects = [f"smart precision irrigation setup for {slide_heading.lower()}"]
+                    objects = [f"{slide_heading.lower()} field equipment", "crop plants", "soil moisture hardware", "drip tubing"]
 
         elif domain == "healthcare":
             # Healthcare / Hospital Management System domain
@@ -1173,6 +1222,11 @@ class GeminiVisualPipelineService:
                 subjects = [f"{project_title} setup"]
                 objects = [f"{anchor} hardware modules", "system monitoring screen", "workstation"]
 
+        # Enrich objects with specific physical objects identified from slide matter
+        for obj in matter_objects:
+            if obj not in objects and len(objects) < 5:
+                objects.append(obj)
+
         # Build dynamic prompt (Step 4)
         clean_matter = " ".join(slide_matter.split()[:40]) if slide_matter else ""
         matter_context = f"The slide explains: '{clean_matter}'." if clean_matter else ""
@@ -1197,13 +1251,14 @@ class GeminiVisualPipelineService:
         gemini_prompt = (
             f"Create a high-quality {v_type.replace('_', ' ')} for an academic presentation slide titled \"{slide_heading}\".\n\n"
             f"Project Context: {project_title}.\n"
+            f"Slide Heading: {slide_heading}.\n"
             f"Slide Purpose: {disp_purpose}.\n"
             f"{matter_context}\n\n"
             f"Required Subjects: {', '.join(subjects)}.\n"
             f"Key Objects in Scene: {', '.join(objects)}.\n"
             f"Environment: {env}.\n"
             f"Visual Style: {v_style}.\n"
-            f"Composition: Academic presentation ready, uncluttered, clear focal subject, professional natural lighting.\n\n"
+            f"Composition: Academic presentation ready, distinct focal perspective, uncluttered, professional natural lighting.\n\n"
             f"Negative Constraints (CRITICAL): Do NOT include any {', '.join(cls.UNIVERSAL_NEGATIVE_CONSTRAINTS)}."
         )
 
@@ -1327,6 +1382,7 @@ class GeminiVisualPipelineService:
         os.makedirs(report_gen_dir, exist_ok=True)
 
         # Step 3: Force unique image filename
+        orig_out_file_path = out_file_path
         unique_token = uuid.uuid4().hex[:8]
         if not out_file_path or "slide_" in os.path.basename(out_file_path):
             target_filename = f"{effective_report_id}_slide_{slide_index}_{unique_token}.png"
@@ -1379,6 +1435,15 @@ class GeminiVisualPipelineService:
         )
 
         if generated_successfully and img_sha:
+            # Ensure file is also copied to caller's explicit out_file_path if provided
+            if orig_out_file_path and os.path.abspath(orig_out_file_path) != os.path.abspath(out_file_path):
+                import shutil
+                try:
+                    os.makedirs(os.path.dirname(os.path.abspath(orig_out_file_path)), exist_ok=True)
+                    shutil.copy2(out_file_path, orig_out_file_path)
+                except Exception as ex:
+                    logger.warning(f"Could not copy to caller out_file_path: {ex}")
+
             # Step 3 SHA-256 collision check across slides in current report
             if effective_report_id not in cls._REPORT_SLIDE_HASHES:
                 cls._REPORT_SLIDE_HASHES[effective_report_id] = {}
@@ -1396,7 +1461,7 @@ class GeminiVisualPipelineService:
 
             seen_hashes[slide_index] = img_sha
             req.relevance_status = "SUCCESS_GENERATED"
-            req.generated_image_path = out_file_path
+            req.generated_image_path = orig_out_file_path if orig_out_file_path else out_file_path
             req.image_sha256 = img_sha
         else:
             req.relevance_status = "GEMINI_GENERATION_FAILED_NO_FALLBACK"
@@ -1537,6 +1602,18 @@ class GeminiVisualPipelineService:
                 import io
                 os.makedirs(os.path.dirname(os.path.abspath(out_file_path)), exist_ok=True)
                 with PILImage.open(io.BytesIO(image_bytes)) as pil_img:
+                    if aspect_ratio and aspect_ratio > 0:
+                        cur_w, cur_h = pil_img.size
+                        cur_ar = cur_w / max(1, cur_h)
+                        if abs(cur_ar - aspect_ratio) > 0.05:
+                            if cur_ar > aspect_ratio:
+                                new_w = int(cur_h * aspect_ratio)
+                                offset = (cur_w - new_w) // 2
+                                pil_img = pil_img.crop((offset, 0, offset + new_w, cur_h))
+                            else:
+                                new_h = int(cur_w / aspect_ratio)
+                                offset = (cur_h - new_h) // 2
+                                pil_img = pil_img.crop((0, offset, cur_w, offset + new_h))
                     pil_img.save(out_file_path, format="PNG")
 
                 with open(out_file_path, "rb") as f_img:

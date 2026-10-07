@@ -60,9 +60,12 @@ TITLE_DISQUALIFY_PATTERNS = [
     r"^agenda$", r"^table\s+of\s+contents$", r"^contents$", r"^index$",
     r"^overview$", r"^abstract$", r"^acknowledgment[s]?$", r"^certificate$",
     r"^declaration$", r"^bonafide\s+certificate$",
+    r"^academic\s+report$", r"^project\s+report$", r"^seminar\s+report$", r"^technical\s+report$",
+    r"^a\s+report\s+on$", r"^seminar\s+presentation$",
     r"^(a\s+)?(mini|major|seminar|capstone|internship|community\s+service)?\s*(project|seminar|technical)?\s*(report|presentation)\s*(on)?$",
     r"^(on|presentation\s+on|seminar\s+presentation\s+on|project\s+report\s+on)$",
     r"^(thank\s+you|queries\??|questions\??)$",
+    r"^.*thank\s+you.*$", r"^.*queries.*$",
     r"^unit[-\s]*\d+$", r"^chapter[-\s]*\d+$",
     # Institutional headers
     r"\bcollege\s+(of|for)\b", r"\buniversity\b", r"\binstitute\s+(of|for)\b",
@@ -137,6 +140,38 @@ class CustomTemplateService:
                     raise ValueError("Document package exceeds safety thresholds.")
         except zipfile.BadZipFile:
             raise ValueError("The uploaded .docx file is corrupted or could not be decompressed.")
+
+    @staticmethod
+    def validate_template_file(content: bytes, filename: str) -> str:
+        """Validates DOCX or PDF format, magic bytes, size, and integrity. Returns extension."""
+        if not filename:
+            raise ValueError("Please provide a valid document filename.")
+
+        ext = os.path.splitext(filename)[1].lower()
+        if ext == ".pdf" or ext != ".docx":
+            raise ValueError("Only DOCX college templates are currently supported.")
+
+        if len(content) == 0:
+            raise ValueError("The uploaded document is empty.")
+
+        max_bytes = 25 * 1024 * 1024
+        if len(content) > max_bytes:
+            raise ValueError("File is too large. College templates must be under 25MB.")
+
+        if not content.startswith(b"PK\x03\x04"):
+            raise ValueError("Invalid document structure. Please upload a valid Microsoft Word (.docx) file.")
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                namelist = zf.namelist()
+                if "[Content_Types].xml" not in namelist:
+                    raise ValueError("Invalid DOCX archive. Required OpenXML manifest missing.")
+                total_uncompressed = sum(info.file_size for info in zf.infolist())
+                if total_uncompressed > 100 * 1024 * 1024:
+                    raise ValueError("Document package exceeds safety thresholds.")
+        except zipfile.BadZipFile:
+            raise ValueError("The uploaded .docx file is corrupted or could not be decompressed.")
+
+        return ext
 
     @classmethod
     def _detect_first_page_main_title(cls, doc: docx.Document) -> Optional[Dict[str, Any]]:
@@ -501,6 +536,14 @@ class CustomTemplateService:
                         t = p.text.strip()
                         if not t or t.upper() in ("CONTENTS", "AGENDA") or re.match(r"^Pg\.?\s*\d+", t, re.IGNORECASE):
                             continue
+                        # Skip fixed running headers / credentials in TOC slide
+                        t_upper = t.upper()
+                        if (
+                            any(lbl in t_upper for lbl in ("ACADEMIC REPORT", "PROJECT REPORT", "SEMINAR REPORT", "TECHNICAL REPORT", "COLLEGE", "DEPARTMENT OF", "UNIVERSITY", "INSTITUTE"))
+                            or re.search(r"^(academic|project|seminar|technical)\s+report$", t, re.IGNORECASE)
+                            or re.match(r"^(QUERIES\??|Thank\s*You)", t, re.IGNORECASE)
+                        ):
+                            continue
                         clean_t = t.rstrip(":-").strip()
                         if clean_t.upper() not in ("ABSTRACT", "INTRODUCTION", "OBJECTIVES", "ADVANTAGES AND DISADVANTAGES", "ADVANTAGES & DISADVANTAGES", "PROBLEMS WE OBSERVED", "PROBLEMS OBSERVED", "CONCLUSION", "REFERENCES"):
                             candidate_text_fields.append({
@@ -519,7 +562,10 @@ class CustomTemplateService:
 
                 body_entries = [
                     (p_idx, p) for p_idx, p in sl
-                    if p.text.strip() and not re.match(r"^(Pg\.?\s*\d+|QUERIES\??|Thank You)", p.text.strip(), re.IGNORECASE)
+                    if p.text.strip()
+                    and not re.match(r"^(Pg\.?\s*\d+|QUERIES\??|Thank You)", p.text.strip(), re.IGNORECASE)
+                    and not re.search(r"^(academic|project|seminar|technical)\s+report$", p.text.strip(), re.IGNORECASE)
+                    and not any(k in p.text.strip().upper() for k in ("COLLEGE OF", "DEPARTMENT OF", "ACADEMIC REPORT", "PROJECT REPORT", "SEMINAR REPORT"))
                 ]
                 if not body_entries:
                     continue
@@ -758,6 +804,9 @@ class CustomTemplateService:
             from apps.api.services.intelligent_image_service import intelligent_image_service
             intel_imgs = intelligent_image_service.analyze_docx_images(file_path)
             if intel_imgs:
+                for img in intel_imgs:
+                    if "is_logo" not in img:
+                        img["is_logo"] = (img.get("classification") == "college_logo")
                 candidate_images = intel_imgs
         except Exception as e:
             logger.warning(f"Intelligent image analysis fallback: {e}")
@@ -841,9 +890,10 @@ class CustomTemplateService:
         report_type: Optional[str] = "Seminar",
     ) -> Dict[str, Any]:
         """
-        Stores original .docx untouched, performs analysis, and creates template record.
+        Stores original template DOCX file untouched.
+        Performs structural analysis on the DOCX and creates template record.
         """
-        cls.validate_docx(file_bytes, filename)
+        ext = cls.validate_template_file(file_bytes, filename)
 
         template_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
@@ -851,11 +901,12 @@ class CustomTemplateService:
         # 1. Save untouched original file in local/cloud storage
         storage_provider = get_storage_provider()
         storage_rel_path = f"users/{owner_id}/templates/{template_id}/{filename}"
+        content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         storage_provider.upload_file(
             bucket=settings.storage.bucket_templates,
             path=storage_rel_path,
             data=file_bytes,
-            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            content_type=content_type,
         )
 
         local_storage_path = os.path.abspath(
@@ -876,6 +927,7 @@ class CustomTemplateService:
             f"\n[RAW-TEMPLATE-STORED]\n"
             f"template_id={template_id}\n"
             f"filename={filename}\n"
+            f"format={ext}\n"
             f"upload_size={upload_size}\n"
             f"upload_sha256={upload_sha256}\n"
             f"stored_path={local_storage_path}\n"
@@ -886,7 +938,7 @@ class CustomTemplateService:
         print(log_upload)
         logger.info(log_upload)
 
-        # 2. Analyze template
+        # 2. Analyze template DOCX
         analysis = cls.analyze_template_docx(local_storage_path)
 
         # 3. Create Record
@@ -899,9 +951,18 @@ class CustomTemplateService:
             "department": department.strip() if department else None,
             "report_type": report_type or "Seminar",
             "file_type": "docx",
+            "source_file_type": "docx",
+            "source_format": "docx",
+            "converted_from_pdf": False,
             "file_size": len(file_bytes),
             "original_file_path": local_storage_path,
+            "original_pdf_path": None,
             "storage_path": storage_rel_path,
+            "converted_docx_path": local_storage_path,
+            "working_docx_path": local_storage_path,
+            "working_storage_path": storage_rel_path,
+            "file_path": local_storage_path,
+            "path": local_storage_path,
             "status": "ready",
             "analysis_status": "analyzed",
             "is_locked": True,
@@ -916,7 +977,7 @@ class CustomTemplateService:
             "updated_at": now,
         }
 
-        # 4. Save to in-memory store and write metadata.json to disk
+        # 5. Save to in-memory store and write metadata.json to disk
         _CUSTOM_TEMPLATES_STORE[template_id] = record
         try:
             import json
@@ -926,7 +987,7 @@ class CustomTemplateService:
         except Exception as me:
             logger.warning(f"Could not write metadata.json: {me}")
 
-        # 5. Persist to Supabase if configured
+        # 6. Persist to Supabase if configured
         client = db_manager.client
         if client:
             try:
@@ -940,7 +1001,6 @@ class CustomTemplateService:
                     "file_type": "docx",
                     "file_size": len(file_bytes),
                     "status": "analyzed",
-                    "analysis_status": "analyzed",
                     "is_locked": True,
                     "created_at": now,
                     "updated_at": now,
@@ -986,36 +1046,113 @@ class CustomTemplateService:
                             except Exception:
                                 pass
                         if not template and os.path.exists(t_dir):
-                            for f in os.listdir(t_dir):
-                                if f.endswith((".docx", ".pdf")):
-                                    f_path = os.path.abspath(os.path.join(t_dir, f))
-                                    parts = t_dir.replace("\\", "/").split("/")
-                                    owner_id = "usr_demo_student"
-                                    if "users" in parts:
-                                        u_idx = parts.index("users")
-                                        if u_idx + 1 < len(parts):
-                                            owner_id = parts[u_idx + 1]
-                                    template = {
-                                        "id": template_id,
-                                        "owner_id": owner_id,
-                                        "user_id": owner_id,
-                                        "name": f.replace(".docx", "").replace(".pdf", ""),
-                                        "original_file_path": f_path,
-                                        "storage_path": f_path,
-                                        "file_type": "docx" if f.endswith(".docx") else "pdf",
-                                        "file_size": os.path.getsize(f_path),
-                                        "status": "analyzed",
-                                        "is_locked": True,
-                                        "created_at": datetime.now(timezone.utc).isoformat(),
-                                        "updated_at": datetime.now(timezone.utc).isoformat(),
-                                    }
-                                    break
+                            files_in_dir = os.listdir(t_dir)
+                            pdf_files = [f for f in files_in_dir if f.lower().endswith(".pdf")]
+                            docx_files = [f for f in files_in_dir if f.lower().endswith(".docx")]
+
+                            parts = t_dir.replace("\\", "/").split("/")
+                            owner_id = "usr_demo_student"
+                            if "users" in parts:
+                                u_idx = parts.index("users")
+                                if u_idx + 1 < len(parts):
+                                    owner_id = parts[u_idx + 1]
+
+                            if pdf_files:
+                                orig_f = pdf_files[0]
+                                orig_path = os.path.abspath(os.path.join(t_dir, orig_f))
+                                if docx_files:
+                                    working_path = os.path.abspath(os.path.join(t_dir, docx_files[0]))
+                                else:
+                                    stem = os.path.splitext(orig_f)[0]
+                                    working_path = os.path.abspath(os.path.join(t_dir, f"{stem}_working.docx"))
+                                    try:
+                                        from apps.api.services.pdf_to_docx_service import pdf_to_docx_service
+                                        pdf_to_docx_service.convert_pdf_file_to_docx(orig_path, working_path)
+                                    except Exception as ex:
+                                        logger.warning(f"Could not convert PDF template during disk recovery: {ex}")
+
+                                template = {
+                                    "id": template_id,
+                                    "owner_id": owner_id,
+                                    "user_id": owner_id,
+                                    "name": orig_f.replace(".pdf", ""),
+                                    "original_file_path": orig_path,
+                                    "original_pdf_path": orig_path,
+                                    "storage_path": working_path,
+                                    "converted_docx_path": working_path,
+                                    "working_docx_path": working_path,
+                                    "file_path": working_path,
+                                    "path": working_path,
+                                    "converted_from_pdf": True,
+                                    "file_type": "docx",
+                                    "source_file_type": "pdf",
+                                    "source_format": "pdf",
+                                    "file_size": os.path.getsize(orig_path),
+                                    "status": "analyzed",
+                                    "is_locked": True,
+                                    "created_at": datetime.now(timezone.utc).isoformat(),
+                                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                                }
+                            elif docx_files:
+                                orig_f = docx_files[0]
+                                orig_path = os.path.abspath(os.path.join(t_dir, orig_f))
+                                template = {
+                                    "id": template_id,
+                                    "owner_id": owner_id,
+                                    "user_id": owner_id,
+                                    "name": orig_f.replace(".docx", ""),
+                                    "original_file_path": orig_path,
+                                    "storage_path": orig_path,
+                                    "converted_docx_path": orig_path,
+                                    "working_docx_path": orig_path,
+                                    "file_path": orig_path,
+                                    "path": orig_path,
+                                    "converted_from_pdf": False,
+                                    "file_type": "docx",
+                                    "source_file_type": "docx",
+                                    "file_size": os.path.getsize(orig_path),
+                                    "status": "analyzed",
+                                    "is_locked": True,
+                                    "created_at": datetime.now(timezone.utc).isoformat(),
+                                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                                }
                         if template:
                             _CUSTOM_TEMPLATES_STORE[template_id] = template
                             break
 
         if not template:
             return None
+
+        # Verify and guarantee that converted PDF templates point to DOCX, not PDF
+        if template.get("converted_from_pdf") or template.get("source_format") == "pdf" or str(template.get("file_type", "")).lower() == "pdf":
+            cand_docx = (
+                template.get("converted_docx_path")
+                or template.get("working_docx_path")
+                or template.get("storage_path")
+            )
+            if not cand_docx or cand_docx.lower().endswith(".pdf") or not os.path.exists(cand_docx):
+                # Search for docx in the same folder as original_file_path
+                orig_pdf = template.get("original_pdf_path") or template.get("original_file_path")
+                if orig_pdf and os.path.exists(orig_pdf):
+                    stem = os.path.splitext(orig_pdf)[0]
+                    target_docx = f"{stem}_working.docx"
+                    if os.path.exists(target_docx):
+                        template["converted_docx_path"] = target_docx
+                        template["working_docx_path"] = target_docx
+                        template["storage_path"] = target_docx
+                        template["file_path"] = target_docx
+                        template["path"] = target_docx
+                    else:
+                        try:
+                            from apps.api.services.pdf_to_docx_service import pdf_to_docx_service
+                            target_docx, _, _ = pdf_to_docx_service.convert_pdf_file_to_docx(orig_pdf, target_docx)
+                            template["converted_docx_path"] = target_docx
+                            template["working_docx_path"] = target_docx
+                            template["storage_path"] = target_docx
+                            template["file_path"] = target_docx
+                            template["path"] = target_docx
+                        except Exception as ex:
+                            logger.error(f"Failed to auto-convert PDF template {orig_pdf} to DOCX: {ex}")
 
         # Verify ownership if user_id is provided and template is not a public preset
         if user_id and not template.get("is_institution_preset"):

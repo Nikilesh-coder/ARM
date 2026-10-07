@@ -1,0 +1,64 @@
+services:
+  - type: web
+    name: arm-backend
+    runtime: python
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    startCommand: "uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: PROJECT_NAME
+        value: "ReportForge AI"
+      - key: API_V1_STR
+        value: "/api/v1"
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: STORAGE_PROVIDER
+        value: "supabase"
+      - key: STORAGE_BUCKET_TEMPLATES
+        value: "templates"
+      - key: STORAGE_BUCKET_EVIDENCE
+        value: "evidence"
+      - key: STORAGE_BUCKET_REPORTS
+        value: "reports"
+      - key: DEFAULT_AI_PROVIDER
+        value: "gemini"
+      - key: DEFAULT_AI_MODEL
+        value: "gemini-2.5-flash"
+      - key: DEFAULT_IMAGE_PROVIDER
+        value: "xkiro"
+      - key: XKIRO_MODEL
+        value: "sensenova/sensenova-u1.5-lite"
+      - key: XKIRO_FREE_ONLY
+        value: "true"
+      # User-supplied secrets in Render Dashboard (sync: false avoids committing values)
+      - key: FRONTEND_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: XKIRO_API_KEY
+        sync: false
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_API_TOKEN
+        sync: false
+      - key: HF_TOKEN
+        sync: false
+      - key: TOGETHER_API_KEY
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true

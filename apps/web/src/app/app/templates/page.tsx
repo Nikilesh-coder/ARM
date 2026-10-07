@@ -27,6 +27,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
+
 export default function TemplatesPage() {
   const [projects, setProjects] = useState<ProjectDTO[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
@@ -276,7 +278,7 @@ export default function TemplatesPage() {
 
                         {/* DIAGNOSTIC BUTTON: DOWNLOAD ORIGINAL TEMPLATE */}
                         <a
-                          href={`http://127.0.0.1:8000/api/v1/templates/${tpl.id}/raw-download`}
+                          href={`${API_BASE_URL}/api/v1/templates/${tpl.id}/raw-download`}
                           target="_blank"
                           rel="noopener noreferrer"
                           download

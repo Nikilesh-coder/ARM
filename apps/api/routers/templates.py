@@ -132,10 +132,10 @@ def _validate_template_file(content: bytes, filename: str) -> str:
         )
 
     ext = os.path.splitext(filename)[1].lower()
-    if ext not in (".docx", ".pdf"):
+    if ext == ".pdf" or ext != ".docx":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported file type. Please upload a DOCX or PDF."
+            detail="Only DOCX college templates are currently supported."
         )
 
     # Empty file check
@@ -183,29 +183,6 @@ def _validate_template_file(content: bytes, filename: str) -> str:
                 detail="ARM could not read this file. Please upload a valid document."
             )
 
-    # PDF validation
-    elif ext == ".pdf":
-        # Magic bytes check (%PDF-)
-        if not content.startswith(b"%PDF-"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="ARM could not read this file. Please upload a valid document."
-            )
-
-        # Deep PDF structural inspection using pypdf
-        try:
-            reader = pypdf.PdfReader(io.BytesIO(content))
-            if len(reader.pages) == 0:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="ARM could not read this file. Please upload a valid document."
-                )
-        except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="ARM could not read this file. Please upload a valid document."
-            )
-
     return ext
 
 
@@ -232,9 +209,9 @@ async def upload_project_template(
     template_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
 
-    # 1. Private Storage Destination
-    storage_path = f"users/{owner_id}/projects/{project_id}/templates/{template_id}/original{ext}"
-    content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if ext == ".docx" else "application/pdf"
+    # 1. Private Storage Destination - Store untouched original DOCX template
+    storage_path = f"users/{owner_id}/projects/{project_id}/templates/{template_id}/original.docx"
+    content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
     storage_provider = get_storage_provider()
     try:
@@ -250,6 +227,15 @@ async def upload_project_template(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Template upload failed. Please try again."
         )
+
+    local_storage_dir = os.path.abspath(
+        os.path.join(".storage", settings.storage.bucket_templates, f"users/{owner_id}/projects/{project_id}/templates/{template_id}")
+    )
+    os.makedirs(local_storage_dir, exist_ok=True)
+    local_docx_path = os.path.join(local_storage_dir, "original.docx")
+
+    with open(local_docx_path, "wb") as f_docx:
+        f_docx.write(content)
 
     # 2. Safe Replacement: Historical templates remain preserved in storage and DB
     # The active template is queried via order('created_at', desc=True)
@@ -273,9 +259,17 @@ async def upload_project_template(
         "owner_id": db_user_id,
         "project_id": db_proj_id,
         "name": file.filename,
-        "original_file_path": storage_path,
+        "original_file_path": local_docx_path,
+        "original_pdf_path": None,
         "storage_path": storage_path,
-        "file_type": ext.lstrip(".").lower(),
+        "converted_docx_path": local_docx_path,
+        "working_docx_path": local_docx_path,
+        "file_path": local_docx_path,
+        "path": local_docx_path,
+        "converted_from_pdf": False,
+        "source_format": "docx",
+        "source_file_type": "docx",
+        "file_type": "docx",
         "file_size": len(content),
         "status": "uploaded",
         "analysis_status": "pending",
@@ -301,6 +295,12 @@ async def upload_project_template(
         "user_id": owner_id,
         "project_id": project_id
     }
+    from apps.api.services.custom_template_service import _CUSTOM_TEMPLATES_STORE
+    _CUSTOM_TEMPLATES_STORE[template_id] = {
+        **template_record,
+        "user_id": owner_id,
+        "project_id": project_id
+    }
 
     return TemplateUploadResponse(
         template_id=template_id,
@@ -311,7 +311,7 @@ async def upload_project_template(
         analysis_status="pending",
         project_id=project_id,
         original_file_path=storage_path,
-        file_type=ext.lstrip(".").lower(),
+        file_type="docx",
         message="Template uploaded successfully. Ready for analysis."
     )
 
@@ -348,6 +348,13 @@ async def upload_custom_college_template(
     owner_id = user["id"] if user else "usr_demo_student"
     content = await file.read()
     upload_filename = file.filename or "college_template.docx"
+    ext = os.path.splitext(upload_filename)[1].lower()
+    if ext == ".pdf" or ext != ".docx":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only DOCX college templates are currently supported."
+        )
+
     upload_size = len(content)
     upload_sha256 = hashlib.sha256(content).hexdigest()
 
@@ -1170,10 +1177,20 @@ async def upload_template_standalone(
         _TEMPLATES_DB[template_id] = {
             "id": template_id,
             "filename": file.filename or f"template{ext}",
+            "original_file_path": saved_path,
+            "storage_path": saved_path,
+            "converted_docx_path": saved_path,
+            "working_docx_path": saved_path,
             "path": saved_path,
+            "converted_from_pdf": False,
+            "file_type": "docx",
             "size": len(content)
         }
         _TEMPLATE_SCHEMAS[template_id] = schema
+        from apps.api.services.custom_template_service import _CUSTOM_TEMPLATES_STORE
+        _CUSTOM_TEMPLATES_STORE[template_id] = dict(_TEMPLATES_DB[template_id])
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Failed to analyze {ext.lstrip('.').upper()} template: {str(e)}")
 

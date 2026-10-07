@@ -18,6 +18,7 @@ import {
   GraduationCap
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth-context";
 
 const SIDEBAR_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -32,6 +33,9 @@ const SIDEBAR_ITEMS = [
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const { signOut, userName, userEmail } = useAuth();
+  const displayName = userName || "Scholar";
+  const displaySub = userEmail || "Academic Researcher";
 
   return (
     <aside className="w-64 border-r border-slate-200/80 bg-white flex flex-col justify-between h-[calc(100vh-4rem)] sticky top-16 hidden md:flex">
@@ -92,13 +96,20 @@ export function AppSidebar() {
             <GraduationCap className="w-4 h-4" />
           </div>
           <div className="min-w-0">
-            <div className="text-xs font-bold text-slate-800 truncate">Alex Student</div>
-            <div className="text-[10px] text-slate-400 truncate">B.Tech CS &middot; 2026</div>
+            <div className="text-xs font-bold text-slate-800 truncate">{displayName}</div>
+            <div className="text-[10px] text-slate-400 truncate">{displaySub}</div>
           </div>
         </div>
-        <Link href="/login" title="Logout" className="text-slate-400 hover:text-slate-700 p-1 rounded-md">
+        <button
+          type="button"
+          onClick={async () => {
+            await signOut();
+          }}
+          title="Logout"
+          className="text-slate-400 hover:text-slate-700 p-1 rounded-md cursor-pointer transition-colors"
+        >
           <LogOut className="w-4 h-4" />
-        </Link>
+        </button>
       </div>
     </aside>
   );

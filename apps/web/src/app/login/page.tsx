@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PublicNav } from "@/components/layout/public-nav";
@@ -10,9 +10,11 @@ import { Button } from "@/components/ui/button";
 import { StatusBanner } from "@/components/ui/status-banner";
 import { Lock, Mail, ArrowRight } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth-context";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { isLoading: isAuthLoading, isAuthenticated } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -20,6 +22,12 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [showPersonalizedWelcome, setShowPersonalizedWelcome] = useState(false);
   const [resolvedName, setResolvedName] = useState("there");
+
+  useEffect(() => {
+    if (!isAuthLoading && isAuthenticated && !showPersonalizedWelcome) {
+      router.replace("/app");
+    }
+  }, [isAuthLoading, isAuthenticated, showPersonalizedWelcome, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,6 +93,26 @@ export default function LoginPage() {
 
   if (showPersonalizedWelcome) {
     return <PersonalizedWelcome userName={resolvedName} destinationUrl="/app" />;
+  }
+
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-6">
+        <div className="flex flex-col items-center space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-zinc-900 border border-zinc-700 flex items-center justify-center text-white font-mono font-bold text-base shadow-xl">
+            ARM
+          </div>
+          <p className="text-sm text-zinc-400 font-light flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+            Checking session...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (isAuthenticated) {
+    return null;
   }
 
   return (

@@ -4,8 +4,10 @@ import React from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ArrowRight, BookOpen } from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
 
 export function GetStartedSection() {
+  const { isAuthenticated, isLoading } = useAuth();
   return (
     <section className="relative w-full py-20 px-6 max-w-4xl mx-auto text-center border-t border-zinc-200 dark:border-zinc-900 transition-colors duration-300">
       <div className="p-10 sm:p-14 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-gradient-to-b from-zinc-50 to-white dark:from-zinc-900/60 dark:to-zinc-950/80 shadow-xl relative overflow-hidden transition-colors duration-300">
@@ -17,9 +19,9 @@ export function GetStartedSection() {
             Attach your project evidence, specify your university formatting rules, and let ARM assemble your academic documentation.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Link href="/signup">
+            <Link href={!isLoading && isAuthenticated ? "/app" : "/signup"}>
               <Button variant="primary" size="lg" className="w-full sm:w-auto font-medium">
-                Get Started
+                {!isLoading && isAuthenticated ? "Open Workspace" : "Get Started"}
                 <ArrowRight className="w-4 h-4 ml-1" />
               </Button>
             </Link>

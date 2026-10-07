@@ -14,6 +14,7 @@ import {
   LogOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth-context";
 
 interface ArmSidebarProps {
   onNewChat?: () => void;
@@ -34,26 +35,33 @@ export function ArmSidebar({
 }: ArmSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
+  const { signOut, userName: authUserName, userEmail: authUserEmail } = useAuth();
 
-  const [userName, setUserName] = useState(propName || "Engineering Scholar");
-  const [userEmail, setUserEmail] = useState(propEmail || "scholar@university.edu");
+  const [userName, setUserName] = useState(propName || authUserName || "Engineering Scholar");
+  const [userEmail, setUserEmail] = useState(propEmail || authUserEmail || "scholar@university.edu");
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
+    if (authUserName) {
+      setUserName(authUserName);
+    } else if (typeof window !== "undefined") {
       const storedName = localStorage.getItem("arm_user_name");
-      const storedEmail = localStorage.getItem("arm_user_email");
       if (storedName && storedName.trim()) {
         setUserName(storedName.trim());
       } else if (propName) {
         setUserName(propName);
       }
+    }
+    if (authUserEmail) {
+      setUserEmail(authUserEmail);
+    } else if (typeof window !== "undefined") {
+      const storedEmail = localStorage.getItem("arm_user_email");
       if (storedEmail && storedEmail.trim()) {
         setUserEmail(storedEmail.trim());
       } else if (propEmail) {
         setUserEmail(propEmail);
       }
     }
-  }, [propName, propEmail]);
+  }, [propName, propEmail, authUserName, authUserEmail]);
 
   // Strict 4 secondary navigation items + 1 primary action (New Chat) as mandated in Section 7
   const navItems = [
@@ -179,14 +187,17 @@ export function ArmSidebar({
               <p className="text-[10px] text-zinc-500 font-mono truncate">{userEmail}</p>
             </div>
           </Link>
-          <Link
-            href="/login"
-            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors shrink-0 ml-1"
+          <button
+            type="button"
+            onClick={async () => {
+              await signOut();
+            }}
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors shrink-0 ml-1 cursor-pointer"
             title="Sign out"
             aria-label="Sign out"
           >
             <LogOut className="w-3.5 h-3.5" />
-          </Link>
+          </button>
         </div>
       </div>
     </div>

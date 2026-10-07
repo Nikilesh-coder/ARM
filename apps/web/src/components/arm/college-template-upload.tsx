@@ -148,9 +148,9 @@ export function CollegeTemplateUpload({
     if (fileInputRef.current) fileInputRef.current.value = "";
 
     const nameLower = file.name.toLowerCase();
-    if (!nameLower.endsWith(".docx") && !nameLower.endsWith(".pdf")) {
+    if (!nameLower.endsWith(".docx")) {
       setUploadState("error");
-      setErrorMessage("Unsupported file type. Please upload a DOCX or PDF.");
+      setErrorMessage("Unsupported file type. Only DOCX college templates (.docx) are currently supported.");
       return;
     }
 
@@ -168,11 +168,12 @@ export function CollegeTemplateUpload({
 
     setUploadState("uploading");
     setErrorMessage(null);
-    setStatusMessage(`Uploading ${file.name}...`);
+    setStatusMessage("Uploading template...");
     setAnalysisData(null);
 
     try {
       const res = await apiClient.uploadProjectTemplate(projectId, file);
+
       const newTemplate: TemplateData = {
         id: res.template_id,
         name: res.name,
@@ -186,12 +187,12 @@ export function CollegeTemplateUpload({
 
       setTemplate(newTemplate);
       setUploadState("ready");
-      setStatusMessage("Template uploaded successfully. Ready for analysis.");
+      setStatusMessage("Template ready");
       onTemplateUpdated?.(newTemplate);
     } catch (err: any) {
       setUploadState("error");
       setErrorMessage(
-        err.message || "Template upload failed. Please try again with a valid DOCX or PDF document."
+        err.message || "Template upload failed. Please try again with a valid DOCX document."
       );
     }
   };
@@ -210,6 +211,7 @@ export function CollegeTemplateUpload({
             if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
             setIsAnalyzing(false);
             setUploadState("analyzed");
+            setStatusMessage("Template ready");
             await loadAnalysis(templateId);
             setTemplate((prev) => prev ? { ...prev, status: "analyzed", analysis_status: "completed" } : null);
           } else if (job.status === "failed") {
@@ -231,9 +233,9 @@ export function CollegeTemplateUpload({
     setIsAnalyzing(true);
     setUploadState("analyzing");
     setErrorMessage(null);
-    setStatusMessage("Starting template analysis...");
+    setStatusMessage("Analyzing template...");
     setAnalysisProgress(10);
-    setCurrentStep("Initializing parser...");
+    setCurrentStep("Analyzing template structure...");
 
     try {
       const res = await apiClient.analyzeProjectTemplate(projectId, template.id);
@@ -278,7 +280,7 @@ export function CollegeTemplateUpload({
       <input
         ref={fileInputRef}
         type="file"
-        accept=".docx,.pdf"
+        accept=".docx"
         className="sr-only"
         id={`template-upload-input-${projectId}`}
         onChange={handleFileChange}
@@ -294,16 +296,16 @@ export function CollegeTemplateUpload({
             className="text-base font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-2"
           >
             <FileCode2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-            College Report Template
+            Upload College Template (.docx)
           </h3>
           <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 max-w-xl">
-            Upload the report format provided by your college. ARM parses its layout, typography,
+            Upload the report format provided by your college (.docx). ARM parses its layout, typography,
             and structure to guarantee 100% compliant report generation.
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <span className="text-[11px] font-mono text-zinc-500 bg-zinc-100 dark:bg-zinc-900 px-2 py-1 rounded">
-            Accepted: DOCX, PDF (≤25MB)
+            Supported format: .docx
           </span>
         </div>
       </div>
@@ -362,17 +364,17 @@ export function CollegeTemplateUpload({
             }}
             tabIndex={0}
             role="button"
-            aria-label="Upload College Template"
+            aria-label="Upload College Template (.docx)"
             className="rounded-xl border-2 border-dashed border-zinc-200 dark:border-zinc-800 hover:border-emerald-500 dark:hover:border-emerald-500 bg-zinc-50/50 dark:bg-zinc-900/50 hover:bg-emerald-50/20 dark:hover:bg-emerald-950/10 p-8 text-center cursor-pointer transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
           >
             <div className="w-12 h-12 rounded-full bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 flex items-center justify-center mx-auto mb-3">
               <Upload className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
             </div>
             <h4 className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
-              Select or Drop College Template Document
+              Select or Drop College Template Document (.docx)
             </h4>
             <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-sm mx-auto mt-1 mb-4">
-              Upload your department report guideline document (.docx or .pdf) to lock layout styles.
+              Upload your department report guideline document (.docx) to lock layout styles.
             </p>
             <Button
               variant="primary"
@@ -382,10 +384,10 @@ export function CollegeTemplateUpload({
                 handleTriggerPicker();
               }}
               className="text-xs font-medium focus-visible:ring-2 focus-visible:ring-emerald-500"
-              aria-label="Upload College Template"
+              aria-label="Upload College Template (.docx)"
             >
               <Upload className="w-3.5 h-3.5 mr-1.5" />
-              Upload Template
+              Upload College Template (.docx)
             </Button>
           </div>
         )}

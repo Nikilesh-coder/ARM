@@ -153,6 +153,7 @@ class VisualEngine:
         target_width: int = 1600,
         target_height: int = 900,
         output_path: Optional[str] = None,
+        slot_id: Optional[str] = None,
     ) -> VisualEngineResult:
         """
         Executes complete intelligent visual generation flow:
@@ -273,6 +274,7 @@ class VisualEngine:
             output_format="PNG",
             output_path=final_out_path,
             report_id=report_id,
+            slot_id=slot_id,
         )
 
         img_res = image_generation_manager.generate_image(img_req)

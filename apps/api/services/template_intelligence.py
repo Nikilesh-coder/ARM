@@ -103,7 +103,7 @@ class TemplateIntelligenceService:
             if not file_path:
                 raise ValueError(f"Template {template_id} has no storage path registered.")
 
-            # Step 3: Fetch untouched file bytes from storage (30%)
+            # Step 3: Fetch file bytes from storage (30%)
             TemplateIntelligenceService._update_job(
                 job_id,
                 status="running",
@@ -112,10 +112,40 @@ class TemplateIntelligenceService:
             )
 
             storage = get_storage_provider()
-            file_bytes = storage.download_file(settings.storage.bucket_templates, file_path)
+            working_docx_path = template.get("converted_docx_path") or template.get("working_docx_path")
+
+            if working_docx_path and working_docx_path != file_path:
+                try:
+                    file_bytes = storage.download_file(settings.storage.bucket_templates, working_docx_path)
+                    parse_file_type = "docx"
+                except Exception:
+                    file_bytes = storage.download_file(settings.storage.bucket_templates, file_path)
+                    parse_file_type = file_type
+            else:
+                file_bytes = storage.download_file(settings.storage.bucket_templates, file_path)
+                parse_file_type = file_type
 
             if not file_bytes or len(file_bytes) == 0:
                 raise ValueError(f"Downloaded 0 bytes for template {template_id} from {file_path}")
+
+            # If template is PDF and no working DOCX exists, convert to working DOCX
+            if parse_file_type == "pdf":
+                from apps.api.services.pdf_to_docx_service import pdf_to_docx_service
+                try:
+                    working_storage_rel = f"{os.path.splitext(file_path)[0]}_working.docx"
+                    _, working_bytes, _ = pdf_to_docx_service.convert_pdf_bytes_to_docx(file_bytes, original_filename=file_name)
+                    storage.upload_file(
+                        bucket=settings.storage.bucket_templates,
+                        path=working_storage_rel,
+                        data=working_bytes,
+                        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    )
+                    file_bytes = working_bytes
+                    parse_file_type = "docx"
+                    template["converted_docx_path"] = working_storage_rel
+                    template["working_docx_path"] = working_storage_rel
+                except Exception as pde:
+                    logger.warning(f"Could not convert PDF to working DOCX in template intelligence: {pde}")
 
             # Step 4: Parse structure & extract formatting (50%)
             TemplateIntelligenceService._update_job(
@@ -125,7 +155,7 @@ class TemplateIntelligenceService:
                 current_step="parsing_structure"
             )
 
-            parser = get_template_parser(file_bytes, file_type=file_type)
+            parser = get_template_parser(file_bytes, file_type=parse_file_type)
 
             TemplateIntelligenceService._update_job(
                 job_id,

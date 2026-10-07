@@ -17,6 +17,7 @@ import zipfile
 import shutil
 import tempfile
 import hashlib
+import uuid
 from typing import Dict, Any, List, Optional, Tuple, Set
 import lxml.etree as ET
 from PIL import Image as PILImage, ImageDraw, ImageFont
@@ -267,6 +268,8 @@ class IntelligentImageService:
 
         from apps.api.services.gemini_visual_pipeline_service import gemini_visual_pipeline_service
 
+        used_hashes: Set[str] = set()
+
         for img_idx, img in enumerate(analyzed_images, start=1):
             if img.get("action") != "replace":
                 continue
@@ -277,15 +280,16 @@ class IntelligentImageService:
 
             slide_idx = img.get("slide_num") or img.get("slide_index") or img.get("page_number") or img_idx
             cls_type = img.get("classification")
-            heading_raw = img.get("new_heading") or img.get("heading") or "System Architecture"
-            heading = " ".join(str(x) for x in heading_raw) if isinstance(heading_raw, (list, tuple, set)) else str(heading_raw or "System Architecture").strip()
+            heading_raw = img.get("new_heading") or img.get("heading") or f"System Visual {img_idx}"
+            heading = " ".join(str(x) for x in heading_raw) if isinstance(heading_raw, (list, tuple, set)) else str(heading_raw or f"System Visual {img_idx}").strip()
             subheading = str(img.get("subheading") or "").strip()
 
             surr_text = img.get("surrounding_text") or ""
             slide_matter_raw = img.get("slide_matter") or surr_text or clean_prob
             slide_matter = " ".join(str(x) for x in slide_matter_raw) if isinstance(slide_matter_raw, (list, tuple, set)) else str(slide_matter_raw or "").strip()
 
-            img_id = img.get("id") or img.get("arm_image_field") or f"img_{img_idx}"
+            arm_field = img.get("arm_image_field") or f"image_{img_idx}"
+            slot_id = f"slot_{img_idx}_{arm_field}"
 
             # Central ARM Visual Engine Decision & Generation Boundary
             from apps.api.services.visual_engine import visual_engine
@@ -311,6 +315,7 @@ class IntelligentImageService:
                 target_width=target_w,
                 target_height=target_h,
                 output_path=vis_out_path,
+                slot_id=slot_id,
             )
 
             # Check if visual was genuinely generated
@@ -318,9 +323,36 @@ class IntelligentImageService:
                 with open(vis_res.asset_path, "rb") as f_sha:
                     img_sha = hashlib.sha256(f_sha.read()).hexdigest()
 
-                replacements[fname] = {
+                # Deduplication check: If hash collision with an earlier slot, generate distinct alternative
+                if img_sha in used_hashes:
+                    logger.warning(
+                        f"[ARM VISUAL ENGINE] Image collision detected for slot {slot_id} ('{heading}'). Regenerating distinct visual..."
+                    )
+                    alt_heading = f"{heading} - Component Architecture {img_idx}"
+                    alt_slot = f"{slot_id}_alt_{uuid.uuid4().hex[:6]}"
+                    vis_res = visual_engine.generate_visual(
+                        project_title=clean_title,
+                        project_description=clean_prob,
+                        detected_domain=domain,
+                        domain_confidence=conf,
+                        slide_number=slide_idx or 1,
+                        slide_heading=alt_heading,
+                        slide_matter=f"{slide_matter} Subsystem {img_idx} operational topology",
+                        report_id=report_id,
+                        target_width=target_w,
+                        target_height=target_h,
+                        output_path=vis_out_path,
+                        slot_id=alt_slot,
+                    )
+                    if vis_res.success and vis_res.asset_path and os.path.exists(vis_res.asset_path):
+                        with open(vis_res.asset_path, "rb") as f_sha_alt:
+                            img_sha = hashlib.sha256(f_sha_alt.read()).hexdigest()
+
+                used_hashes.add(img_sha)
+
+                item_info = {
                     "file_path": vis_res.asset_path,
-                    "arm_image_field": img.get("arm_image_field"),
+                    "arm_image_field": arm_field,
                     "rel_id": img.get("rel_id"),
                     "filename": fname,
                     "classification": cls_type,
@@ -328,6 +360,13 @@ class IntelligentImageService:
                     "decision_reason": f"{vis_res.visual_type} -> {vis_res.source} ({vis_res.reason})",
                     "sha256": img_sha,
                 }
+                replacements[fname] = item_info
+                replacements[os.path.basename(fname)] = item_info
+                replacements[arm_field] = item_info
+                replacements[f"image_{img_idx}"] = item_info
+                if img.get("rel_id"):
+                    replacements[img["rel_id"]] = item_info
+                replacements[slot_id] = item_info
             else:
                 logger.warning(
                     f"[ARM VISUAL ENGINE] Visual synthesis failed or not returned for slide {slide_idx} "

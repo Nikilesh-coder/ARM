@@ -74,6 +74,11 @@ class CanvaSettings(BaseModel):
     redirect_uri: str = os.getenv("CANVA_REDIRECT_URI", "http://localhost:3000/app/integrations/canva/callback")
 
 
+class PdfConverterSettings(BaseModel):
+    provider: str = os.getenv("PDF_CONVERTER_PROVIDER", "cloudconvert")  # 'cloudconvert' or 'internal'
+    cloudconvert_api_key: Optional[str] = os.getenv("CLOUDCONVERT_API_KEY", None)
+
+
 class AppSettings(BaseModel):
     project_name: str = os.getenv("PROJECT_NAME", "ReportForge AI")
     environment: str = os.getenv("ENVIRONMENT", "development")  # 'development', 'staging', 'production'
@@ -81,6 +86,8 @@ class AppSettings(BaseModel):
     api_v1_str: str = os.getenv("API_V1_STR", "/api/v1")
     secret_key: str = os.getenv("SECRET_KEY", "dev_secret_key_reportforge_2026_placeholder")
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
+    frontend_url: Optional[str] = os.getenv("FRONTEND_URL", None)
+    cors_origins: List[str] = Field(default_factory=list)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -88,12 +95,44 @@ class AppSettings(BaseModel):
             import secrets
             self.secret_key = secrets.token_hex(32)
 
-    cors_origins: List[str] = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000"
-    ]
+        # Build dynamic, deduplicated CORS origins
+        origins = [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000"
+        ]
+
+        # Add FRONTEND_URL (e.g. https://arm-frontend.vercel.app)
+        frontend_url_env = os.getenv("FRONTEND_URL", "").strip()
+        if frontend_url_env:
+            for u in frontend_url_env.split(","):
+                u_clean = u.strip().rstrip("/")
+                if u_clean and u_clean not in origins:
+                    origins.append(u_clean)
+
+        # Add CORS_ORIGINS / BACKEND_CORS_ORIGINS
+        custom_origins = os.getenv("CORS_ORIGINS") or os.getenv("BACKEND_CORS_ORIGINS")
+        if custom_origins:
+            custom_origins = custom_origins.strip()
+            if custom_origins.startswith("[") and custom_origins.endswith("]"):
+                try:
+                    import json
+                    parsed = json.loads(custom_origins)
+                    if isinstance(parsed, list):
+                        for item in parsed:
+                            item_clean = str(item).strip().rstrip("/")
+                            if item_clean and item_clean not in origins:
+                                origins.append(item_clean)
+                except Exception:
+                    pass
+            else:
+                for item in custom_origins.split(","):
+                    item_clean = item.strip().rstrip("/")
+                    if item_clean and item_clean not in origins:
+                        origins.append(item_clean)
+
+        self.cors_origins = origins
 
     storage: StorageSettings = Field(default_factory=StorageSettings)
     ai: AISettings = Field(default_factory=AISettings)
@@ -101,6 +140,7 @@ class AppSettings(BaseModel):
     document_provider: DocumentProviderSettings = Field(default_factory=DocumentProviderSettings)
     image_provider: ImageProviderSettings = Field(default_factory=ImageProviderSettings)
     canva: CanvaSettings = Field(default_factory=CanvaSettings)
+    pdf_converter: PdfConverterSettings = Field(default_factory=PdfConverterSettings)
 
 
 settings = AppSettings()

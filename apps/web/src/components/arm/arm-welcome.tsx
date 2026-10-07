@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { ArrowDown } from "lucide-react";
+import Link from "next/link";
+import { ArrowDown, Play } from "lucide-react";
 
 interface ArmWelcomeProps {
   onContinue?: () => void;
@@ -82,6 +83,16 @@ export function ArmWelcome({ onContinue }: ArmWelcomeProps) {
           <p className="text-base sm:text-lg text-zinc-400 font-light max-w-xl mx-auto leading-relaxed">
             Deterministic academic document generation crafted from your authentic evidence and college template.
           </p>
+
+          <div className="mt-6 flex items-center justify-center gap-3">
+            <Link
+              href="/video"
+              className="px-4 py-2 rounded-full bg-zinc-900/90 border border-zinc-750 text-xs font-mono text-zinc-300 hover:text-white hover:border-emerald-400/60 transition-all flex items-center gap-2 shadow-lg hover:scale-105"
+            >
+              <Play className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400" />
+              Watch Product Video (42s)
+            </Link>
+          </div>
         </div>
       </div>
 

@@ -183,6 +183,26 @@ class ReportFileStorageService:
                     raise FileNotFoundError(f"Source file not found for report save: {src_path}")
                 if src_path.stat().st_size == 0:
                     raise ValueError(f"Source file is empty (0 bytes) for report {clean_id}: {src_path}")
+                if src_path == canonical_path.resolve():
+                    final_size = canonical_path.stat().st_size
+                    with open(canonical_path, "rb") as f_sha:
+                        file_hash = hashlib.sha256(f_sha.read()).hexdigest()
+                    meta_record = {
+                        "report_id": clean_id,
+                        "storage_key": storage_key,
+                        "file_path": str(canonical_path),
+                        "extension": clean_ext,
+                        "file_size": final_size,
+                        "sha256": file_hash,
+                        "status": "completed",
+                        "saved_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    if metadata:
+                        meta_record.update({k: v for k, v in metadata.items() if k not in meta_record})
+                    cls._save_metadata(clean_id, meta_record)
+                    logger.info(f"[STORAGE-SAVE-SUCCESS] Report '{clean_id}' already at canonical destination.")
+                    return canonical_path, storage_key
+
                 shutil.copyfile(str(src_path), str(staging_path))
                 # Sync staging file
                 with open(staging_path, "rb+") as f_out:
@@ -204,7 +224,19 @@ class ReportFileStorageService:
 
             # 4. Atomically move/replace to destination
             cls.get_reports_dir().mkdir(parents=True, exist_ok=True)
-            os.replace(str(staging_path), str(canonical_path))
+            try:
+                os.replace(str(staging_path), str(canonical_path))
+            except (PermissionError, OSError):
+                import time
+                time.sleep(0.1)
+                try:
+                    os.replace(str(staging_path), str(canonical_path))
+                except (PermissionError, OSError):
+                    shutil.copyfile(str(staging_path), str(canonical_path))
+                    try:
+                        staging_path.unlink()
+                    except Exception:
+                        pass
 
             # 5. Verify final canonical path exists and has size > 0
             if not canonical_path.exists():

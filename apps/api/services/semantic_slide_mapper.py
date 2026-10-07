@@ -44,7 +44,7 @@ FIXED_STRUCTURAL_HEADINGS = {
     "THANK YOU",
 }
 
-# Fixed academic and metadata labels on cover/credit slides
+# Fixed academic and metadata labels on cover/credit slides and running headers
 FIXED_METADATA_LABELS = {
     "PRESENTATION ON",
     "PRESENTED BY",
@@ -52,6 +52,12 @@ FIXED_METADATA_LABELS = {
     "UNDER THE GUIDANCE OF",
     "GUIDED BY",
     "COMMUNITY SERVICE PROJECT",
+    "ACADEMIC REPORT",
+    "PROJECT REPORT",
+    "SEMINAR REPORT",
+    "TECHNICAL REPORT",
+    "A REPORT ON",
+    "SEMINAR PRESENTATION",
 }
 
 # Canonical section names whose heading text is preserved as template structure,
@@ -96,6 +102,23 @@ class SemanticSlideMapper:
     project-specific elements, and synthesizes matching replacements for
     all old project titles, headings, TOC items, and body text.
     """
+
+    @classmethod
+    def is_fixed_element(cls, text: str) -> bool:
+        """Determines if a paragraph text represents a fixed header, metadata, or structural anchor."""
+        t_clean = text.strip()
+        if not t_clean:
+            return False
+        t_upper = t_clean.upper()
+        if any(lbl in t_upper for lbl in FIXED_METADATA_LABELS):
+            return True
+        if re.match(r"^(Pg\.?\s*\d+|QUERIES\??|Questions\??|Thank\s*You)", t_clean, re.IGNORECASE):
+            return True
+        if re.search(r"\b(academic|project|seminar|technical)\s+report\b", t_clean, re.IGNORECASE):
+            return True
+        if any(k in t_upper for k in ("COLLEGE OF", "DEPARTMENT OF", "UNIVERSITY", "INSTITUTE OF", "ENGINEERING COLLEGE")):
+            return True
+        return False
 
     @classmethod
     def detect_project_domain(cls, project_title: str, problem_statement: str = "") -> str:
@@ -681,12 +704,42 @@ class SemanticSlideMapper:
                         })
                         continue
 
+                    # Check if paragraph contains an embedded quoted title, e.g. Presentation on "ELECTRIFY THE FUTURE..."
+                    quote_m = re.search(r'["“]([^"”]{5,120})["”]', t)
+                    if quote_m and not cover_title_found:
+                        cover_title_found = True
+                        inner_cand = quote_m.group(1).strip()
+                        full_token = quote_m.group(0).strip()
+                        analysis_rows.append({
+                            "slide": slide_label,
+                            "original": t[:50],
+                            "classification": "Project Title",
+                            "replacement": clean_title,
+                        })
+                        if full_token.lower() not in existing_mapped_origs:
+                            mapped_fields.append({
+                                "id": f"field_cover_title_{p_idx}",
+                                "template_element": full_token,
+                                "original_text": full_token,
+                                "sample_text": t[:80],
+                                "inner_title": inner_cand,
+                                "arm_field": "project_title",
+                                "action": "replace",
+                                "is_replaceable": True,
+                                "content_type": "title",
+                                "location": f"Slide 1 / Paragraph {p_idx + 1}",
+                            })
+                            existing_mapped_origs.add(full_token.lower())
+                            existing_mapped_origs.add(inner_cand.lower())
+                        continue
+
                     # Fixed structural & academic credentials
                     is_credential_label = any(sub in t_upper for sub in (
                         "PRESENTATION ON", "PRESENTED BY", "SUBMITTED BY", "UNDER THE GUIDANCE OF",
                         "COMMUNITY SERVICE PROJECT", "DEPARTMENT OF", "COLLEGE", "ENGINEERING",
                         "ASSOCIATE PROFESSOR", "ASSISTANT PROFESSOR", "HEAD OF THE DEPARTMENT",
-                        "AUTONOMOUS", "BACHELOR OF", "DR.", "PH.D."
+                        "AUTONOMOUS", "BACHELOR OF", "DR.", "PH.D.",
+                        "ACADEMIC REPORT", "PROJECT REPORT", "SEMINAR REPORT", "TECHNICAL REPORT", "A REPORT ON"
                     )) or re.match(r"^\d{2}[A-Z]{3}\d{2}[A-Z0-9]+", t)  # student roll numbers
 
                     if is_credential_label:
@@ -700,7 +753,7 @@ class SemanticSlideMapper:
 
                     # If this paragraph is the designated title, or no title found yet and it looks like a title:
                     is_title_candidate = False
-                    if designated_title_text and designated_title_text.lower() in t.lower():
+                    if designated_title_text and designated_title_text.lower() in t.lower() and not is_credential_label:
                         is_title_candidate = True
                     elif not cover_title_found and not is_credential_label and len(t) >= 10:
                         is_title_candidate = True
@@ -777,6 +830,16 @@ class SemanticSlideMapper:
                         })
                         continue
 
+                    # Fixed metadata / running headers / credentials in TOC slide
+                    if cls.is_fixed_element(t):
+                        analysis_rows.append({
+                            "slide": slide_label,
+                            "original": t,
+                            "classification": "Fixed Academic Credential",
+                            "replacement": "PRESERVED (Fixed)",
+                        })
+                        continue
+
                     # Check if this TOC entry is a canonical heading or project-specific heading
                     clean_t = t.rstrip(":-").strip()
                     if clean_t.upper() in CANONICAL_SECTION_HEADINGS:
@@ -815,20 +878,33 @@ class SemanticSlideMapper:
             # Regular Presentation Slide
             body_entries = [
                 (p_idx, p) for p_idx, p in sl
-                if p.text.strip() and not re.match(r"^(Pg\.?\s*\d+|QUERIES\??|Thank You)", p.text.strip(), re.IGNORECASE)
+                if p.text.strip()
+                and not re.match(r"^(Pg\.?\s*\d+|QUERIES\??|Thank You)", p.text.strip(), re.IGNORECASE)
+                and not cls.is_fixed_element(p.text.strip())
             ]
+
+            # Record fixed elements in sl for analysis report
+            for p_idx, p in sl:
+                p_t = p.text.strip()
+                if not p_t:
+                    continue
+                if re.match(r"^Pg\.?\s*\d+", p_t, re.IGNORECASE):
+                    analysis_rows.append({
+                        "slide": slide_label,
+                        "original": p_t,
+                        "classification": "Fixed Page Number",
+                        "replacement": "PRESERVED (Fixed)",
+                    })
+                elif cls.is_fixed_element(p_t):
+                    analysis_rows.append({
+                        "slide": slide_label,
+                        "original": p_t,
+                        "classification": "Fixed Academic Credential",
+                        "replacement": "PRESERVED (Fixed)",
+                    })
 
             # Detect fixed closing/Q&A slides (where all non-page paragraphs are structural anchors)
             if not body_entries:
-                for p_idx, p in sl:
-                    t = p.text.strip()
-                    if t:
-                        analysis_rows.append({
-                            "slide": slide_label,
-                            "original": t[:40],
-                            "classification": "Fixed Template Element",
-                            "replacement": "PRESERVED (Fixed)",
-                        })
                 continue
 
             # Identify Slide Heading
@@ -944,6 +1020,15 @@ class SemanticSlideMapper:
                         "slide": slide_label,
                         "original": p_txt,
                         "classification": "Fixed Page Number",
+                        "replacement": "PRESERVED (Fixed)",
+                    })
+                    continue
+
+                if cls.is_fixed_element(p_txt):
+                    analysis_rows.append({
+                        "slide": slide_label,
+                        "original": p_txt,
+                        "classification": "Fixed Academic Credential",
                         "replacement": "PRESERVED (Fixed)",
                     })
                     continue

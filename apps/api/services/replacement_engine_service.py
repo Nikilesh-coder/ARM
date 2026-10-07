@@ -252,7 +252,16 @@ class ReplacementEngineService:
                 from apps.api.services.custom_template_service import custom_template_service
                 cust_tpl = custom_template_service.get_template(resolved_template_id)
                 if cust_tpl:
-                    c_path = cust_tpl.get("original_file_path") or cust_tpl.get("storage_path")
+                    c_path = (
+                        cust_tpl.get("converted_docx_path")
+                        or cust_tpl.get("working_docx_path")
+                        or cust_tpl.get("original_file_path")
+                        or cust_tpl.get("storage_path")
+                    )
+                    if c_path and c_path.lower().endswith(".pdf"):
+                        working_cand = f"{os.path.splitext(c_path)[0]}_working.docx"
+                        if os.path.exists(working_cand):
+                            c_path = working_cand
                     if c_path and os.path.exists(c_path):
                         template_path = os.path.abspath(c_path)
                     custom_field_mapping = cust_tpl.get("field_mapping")
@@ -317,8 +326,15 @@ class ReplacementEngineService:
 
         if is_no_change_requested:
             from apps.api.services.report_file_storage_service import report_file_storage_service
-            is_pdf_template = template_path.lower().endswith(".pdf")
-            ext = "pdf" if is_pdf_template else (Path(template_path).suffix.lstrip(".").lower() or "docx")
+            if template_path.lower().endswith(".pdf"):
+                working_docx_path = f"{os.path.splitext(template_path)[0]}_working.docx"
+                if not os.path.exists(working_docx_path):
+                    from apps.api.services.pdf_to_docx_service import pdf_to_docx_service
+                    pdf_to_docx_service.convert_pdf_file_to_docx(template_path, working_docx_path)
+                if os.path.exists(working_docx_path):
+                    template_path = os.path.abspath(working_docx_path)
+
+            ext = Path(template_path).suffix.lstrip(".").lower() or "docx"
             canonical_path, storage_key = report_file_storage_service.save_report_file_atomically(
                 report_id=job_id,
                 source_data_or_path=template_path,
@@ -338,17 +354,11 @@ class ReplacementEngineService:
             job_record["status_message"] = "Report successfully compiled! College template preserved with zero redesign (exact copy)."
             job_record["fields_replaced"] = 0
             job_record["images_replaced"] = 0
-
-            if is_pdf_template:
-                job_record["pdf_path"] = target_out_path
-                job_record["download_pdf_url"] = f"/api/v1/replacement/download/{job_id}?format=pdf"
-                job_record["preview_html"] = "<div class='pdf-preview'><h3>PDF Master Template (Unchanged)</h3></div>"
-            else:
-                job_record["docx_path"] = target_out_path
-                job_record["download_docx_url"] = f"/api/v1/replacement/download/{job_id}?format=docx"
-                job_record["preview_html"] = "<div class='p-4 text-center text-xs text-zinc-500'>Original Template Preserved Byte-for-Byte (Zero Modifications Requested)</div>"
-                job_record["stats"] = {"validation_status": "VALID", "fields_replaced": 0, "images_replaced": 0}
-                job_record["preview_url"] = f"/api/v1/replacement/preview/{job_id}"
+            job_record["docx_path"] = target_out_path
+            job_record["download_docx_url"] = f"/api/v1/replacement/download/{job_id}?format=docx"
+            job_record["preview_html"] = "<div class='p-4 text-center text-xs text-zinc-500'>Original Template Preserved Byte-for-Byte (Zero Modifications Requested)</div>"
+            job_record["stats"] = {"validation_status": "VALID", "fields_replaced": 0, "images_replaced": 0}
+            job_record["preview_url"] = f"/api/v1/replacement/preview/{job_id}"
 
             job_record["updated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -943,49 +953,53 @@ class ReplacementEngineService:
         output_dir = os.path.join(tempfile.gettempdir(), "arm_reports")
         os.makedirs(output_dir, exist_ok=True)
 
-        is_pdf_template = template_path.lower().endswith(".pdf")
+        # PDF Templates: Automatically convert to editable working DOCX representation to use existing DOCX pipeline
+        if template_path.lower().endswith(".pdf"):
+            working_docx_path = f"{os.path.splitext(template_path)[0]}_working.docx"
+            if not os.path.exists(working_docx_path):
+                from apps.api.services.pdf_to_docx_service import pdf_to_docx_service
+                try:
+                    pdf_to_docx_service.convert_pdf_file_to_docx(template_path, working_docx_path)
+                    logger.info(f"[{job_id}] Auto-converted PDF template to working DOCX: {working_docx_path}")
+                except Exception as pde:
+                    logger.error(f"[{job_id}] PDF template conversion failed: {pde}")
+                    job_record["state"] = ReplacementState.FAILED.value
+                    job_record["arm_ui_state"] = "thinking"
+                    job_record["status_message"] = str(pde)
+                    job_record["errors"] = [{"field": "template_conversion", "reason": str(pde)}]
+                    job_record["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    return job_record
 
-        # CASE 2: College PDF provided as reference / template
-        if is_pdf_template:
-            target_pdf_path = os.path.join(output_dir, f"ARM_Report_{job_id[:8]}.pdf")
-            pdf_engine = PdfTemplateReplacementEngine()
-            replacement_result = pdf_engine.replace(
-                template_path=template_path,
-                field_values=merged_field_values,
-                image_assets=image_assets,
-                output_path=target_pdf_path,
-                job_id=job_id,
-            )
-
-            job_record["fields_replaced"] = replacement_result.fields_replaced
-            job_record["images_replaced"] = replacement_result.images_replaced
-            job_record["audit"] = [a.model_dump() for a in replacement_result.audit]
-            job_record["warnings"] = replacement_result.warnings
-            job_record["errors"] = [e.model_dump() for e in replacement_result.errors]
-
-            if not replacement_result.success:
-                logger.warning(f"[{job_id}] PDF template replacement stopped safely: {replacement_result.errors}")
+            if os.path.exists(working_docx_path):
+                template_path = os.path.abspath(working_docx_path)
+            else:
+                err_msg = (
+                    f"Report generator received a PDF template ({template_path}). "
+                    f"The report generation layer should receive ONLY a DOCX template. "
+                    f"PDF conversion was unsuccessful."
+                )
+                logger.error(f"[{job_id}] {err_msg}")
                 job_record["state"] = ReplacementState.FAILED.value
                 job_record["arm_ui_state"] = "thinking"
-                first_reason = replacement_result.errors[0].reason if replacement_result.errors else "Layout collision or raster scan detected."
-                job_record["status_message"] = (
-                    f"PDF replacement stopped safely: {first_reason} "
-                    f"Recommendation: Convert to an ARM-supported structured template (DOCX format)."
-                )
+                job_record["status_message"] = err_msg
+                job_record["errors"] = [{"field": "template_format", "reason": err_msg}]
                 job_record["updated_at"] = datetime.now(timezone.utc).isoformat()
                 return job_record
 
-            job_record["pdf_path"] = target_pdf_path
-            job_record["state"] = ReplacementState.COMPLETED.value
-            job_record["progress_percent"] = 100
-            job_record["arm_ui_state"] = "completed"
-            job_record["status_message"] = "PDF report successfully compiled in-place!"
-            job_record["download_pdf_url"] = f"/api/v1/replacement/download/{job_id}?format=pdf"
-            job_record["preview_html"] = f"<div class='pdf-preview'><h3>PDF Report Compiled</h3><p>Pages: {replacement_result.metadata.get('pdf_analysis', {}).get('total_pages', 1)}</p></div>"
+        if template_path.lower().endswith(".pdf"):
+            err_msg = (
+                f"Report generator received a PDF template ({template_path}). "
+                f"The report generation layer should receive ONLY a DOCX template."
+            )
+            logger.error(f"[{job_id}] {err_msg}")
+            job_record["state"] = ReplacementState.FAILED.value
+            job_record["arm_ui_state"] = "thinking"
+            job_record["status_message"] = err_msg
+            job_record["errors"] = [{"field": "template_format", "reason": err_msg}]
             job_record["updated_at"] = datetime.now(timezone.utc).isoformat()
             return job_record
 
-        # CASE 1: Structured DOCX Master Template (Preferred Editable Master Format)
+        # Structured DOCX Master Template (Preferred Editable Master Format)
         from apps.api.services.report_file_storage_service import report_file_storage_service
         ext = Path(template_path).suffix.lstrip(".").lower() or "docx"
         target_docx_path = str(report_file_storage_service.get_staging_dir() / f"{job_id}.{ext}")
@@ -1149,7 +1163,7 @@ class ReplacementEngineService:
         # - Requested new images were actually generated & inserted.
         # - If any check fails, FAIL THE REPORT instead of returning unchanged template.
         num_requested_images = len(images_to_generate) if ("images_to_generate" in locals() and images_to_generate) else 0
-        if num_requested_images > 0 and job_record.get("images_replaced", 0) == 0:
+        if num_requested_images > 0 and len(synth_map) == 0 and job_record.get("images_replaced", 0) == 0:
             err_msg = (
                 f"Image replacement validation failed: {num_requested_images} replacement images were requested, "
                 f"but 0 new images were successfully generated or replaced into the template. "

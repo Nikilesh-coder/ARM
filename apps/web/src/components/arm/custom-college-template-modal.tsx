@@ -95,13 +95,15 @@ export function CustomCollegeTemplateModal({
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [analysisStepText, setAnalysisStepText] = useState<string>("Uploading template...");
 
   if (!isOpen) return null;
 
   const handleFileSelect = (file: File) => {
     setErrorMessage(null);
-    if (!file.name.toLowerCase().endsWith(".docx")) {
-      setErrorMessage("Unsupported file format. Please upload a Microsoft Word (.docx) file.");
+    const isDocx = file.name.toLowerCase().endsWith(".docx");
+    if (!isDocx) {
+      setErrorMessage("Unsupported file format. Only DOCX college templates (.docx) are currently supported.");
       return;
     }
     if (file.size > 25 * 1024 * 1024) {
@@ -128,7 +130,12 @@ export function CustomCollegeTemplateModal({
 
     setErrorMessage(null);
     setIsUploading(true);
+    setAnalysisStepText("Uploading template...");
     setStep(3); // Analyzing screen
+
+    const t1 = setTimeout(() => {
+      setAnalysisStepText("Analyzing template...");
+    }, 500);
 
     try {
       const res = await apiClient.uploadCustomCollegeTemplate(selectedFile, {
@@ -138,17 +145,24 @@ export function CustomCollegeTemplateModal({
         report_type: reportType,
       });
 
+      if (t1) clearTimeout(t1);
+
       if (res && res.template) {
+        setAnalysisStepText("Template ready");
         setAnalyzedTemplate(res.template);
         setFieldMappings(res.template.field_mapping || []);
         setImageMappings(res.template.image_mapping || []);
-        setStep(4); // Mapping screen
+        setTimeout(() => {
+          setStep(4); // Mapping screen
+        }, 400);
       } else {
         throw new Error("Invalid response from server.");
       }
     } catch (err: any) {
+      if (t1) clearTimeout(t1);
       setErrorMessage(
-        err.message || "Failed to analyze college template. Please ensure the DOCX file is valid and uncorrupted."
+        err.message ||
+          "Failed to analyze college template. Please ensure the DOCX file is valid and uncorrupted."
       );
       setStep(2);
     } finally {
@@ -328,7 +342,7 @@ export function CustomCollegeTemplateModal({
                 </div>
                 <div>
                   <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">
-                    Drag & Drop your College Template (.docx)
+                    Upload College Template (.docx)
                   </h3>
                   <p className="text-xs text-zinc-500 mt-1">
                     or click to choose file from your device (Max 25MB)
@@ -336,7 +350,7 @@ export function CustomCollegeTemplateModal({
                 </div>
                 <div className="flex items-center gap-2 mt-2">
                   <Badge variant="outline" className="text-[10px] text-zinc-500 border-zinc-200 dark:border-zinc-800">
-                    Supports .docx only
+                    Supported format: .docx
                   </Badge>
                   <Badge variant="outline" className="text-[10px] text-emerald-600 dark:text-emerald-400 border-emerald-500/30">
                     Preserves original layout & logos
@@ -352,7 +366,7 @@ export function CustomCollegeTemplateModal({
                 </div>
                 <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
                   ARM does NOT convert your document into plain text or redesign it from scratch. Your uploaded
-                  DOCX will serve as the exact master template, preserving college logos, page borders, headers,
+                  template (.docx) will serve as the exact master layout source, preserving college logos, page borders, headers,
                   footers, and page sizes.
                 </p>
               </div>
@@ -369,7 +383,9 @@ export function CustomCollegeTemplateModal({
                     <FileCode2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                     <div>
                       <p className="text-xs font-medium text-zinc-900 dark:text-white">{selectedFile.name}</p>
-                      <p className="text-[10px] text-zinc-500">{(selectedFile.size / 1024).toFixed(1)} KB • DOCX format</p>
+                      <p className="text-[10px] text-zinc-500">
+                        {(selectedFile.size / 1024).toFixed(1)} KB • DOCX format
+                      </p>
                     </div>
                   </div>
                   <Button
@@ -460,15 +476,15 @@ export function CustomCollegeTemplateModal({
               </div>
               <div>
                 <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">
-                  ARM is Analyzing Template Structure...
+                  {analysisStepText}
                 </h3>
                 <p className="text-xs text-zinc-500 mt-1 max-w-sm">
-                  Inspecting OpenXML geometry, isolating fixed logos and borders, and discovering candidate text and image fields.
+                  Extracting document geometry, isolating fixed logos and borders, and discovering candidate text and image fields.
                 </p>
               </div>
               <div className="flex items-center gap-2 text-[11px] font-mono text-emerald-600 dark:text-emerald-400">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span>Deterministic DOCX AST Inspection</span>
+                <span>{analysisStepText}</span>
               </div>
             </div>
           )}

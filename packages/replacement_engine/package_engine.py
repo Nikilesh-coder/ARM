@@ -155,9 +155,6 @@ class PackageLevelDocxEngine:
                 metadata={"mode": "exact_copy_byte_preserved"},
             )
 
-        # 1. Start from an EXACT copy of the original DOCX file
-        shutil.copyfile(template_path, output_path)
-
         # 2. Extract into a temporary working directory for non-destructive surgery
         workdir = tempfile.mkdtemp(prefix="arm_docx_pkg_")
         replaced_images_set: Set[str] = set()
@@ -166,6 +163,29 @@ class PackageLevelDocxEngine:
         try:
             with zipfile.ZipFile(template_path, "r") as zf:
                 zf.extractall(workdir)
+
+                if field_mapping is None:
+                    from apps.api.services.master_template_service import CANONICAL_FIELDS
+                    template_text_lower = ""
+                    for xml_name in ("word/document.xml", "word/header1.xml", "word/footer1.xml"):
+                        if xml_name in zf.namelist():
+                            template_text_lower += zf.read(xml_name).decode("utf-8", errors="ignore").lower() + " "
+                    for fld in CANONICAL_FIELDS:
+                        if fld.get("is_required", False):
+                            req_name = fld["field_name"]
+                            p_tag = fld.get("placeholder_identifier", f"{{{{{req_name.upper()}}}}}").lower()
+                            if p_tag in template_text_lower or f"{{{req_name.lower()}}}" in template_text_lower:
+                                if not field_values.get(req_name):
+                                    reason = f"Required field '{req_name}' was not provided in student generated content."
+                                    errors.append(ReplacementErrorDetail(field=req_name, reason=reason))
+                    if errors:
+                        return ReplacementResult(
+                            success=False,
+                            job_id=job_id,
+                            state=ReplacementState.FAILED,
+                            template_path=template_path,
+                            errors=errors,
+                        )
 
             # 3. Determine allowable replacements based on explicit mapping
             allowed_fields: Optional[Set[str]] = None
@@ -231,6 +251,7 @@ class PackageLevelDocxEngine:
 
             if image_mapping is not None:
                 # Custom image mapping mode: ONLY replace images explicitly marked as "replace"
+                used_replacement_files: Set[str] = set()
                 for im in image_mapping:
                     action = im.get("action", "fixed").lower()
                     arm_img_f = im.get("arm_image_field", "image_1")
@@ -247,7 +268,16 @@ class PackageLevelDocxEngine:
                         if isinstance(img_src, dict):
                             img_src = img_src.get("storage_path") or img_src.get("file_path") or img_src.get("url")
 
+                        # Dedup guard: If candidate img_src was already assigned to an earlier slot, select an unassigned distinct replacement
+                        if img_src and str(img_src) in used_replacement_files:
+                            for cand_k, cand_v in image_assets.items():
+                                c_path = cand_v.get("file_path") if isinstance(cand_v, dict) else (cand_v.get("storage_path") if isinstance(cand_v, dict) else cand_v)
+                                if c_path and os.path.exists(str(c_path)) and str(c_path) not in used_replacement_files:
+                                    img_src = c_path
+                                    break
+
                         if img_src and os.path.exists(str(img_src)):
+                            used_replacement_files.add(str(img_src))
                             target_media_rel = None
                             if rel_id and rel_id in rel_to_target and "media/" in rel_to_target[rel_id].lower():
                                 target_media_rel = rel_to_target[rel_id]
@@ -291,10 +321,13 @@ class PackageLevelDocxEngine:
             else:
                 # Default mode: check image_1, image_2, image_3
                 # In default templates, image_1 is often the diagram; logo is fixed
+                used_replacement_files: Set[str] = set()
                 for img_slot in ["image_1", "image_2", "image_3"]:
                     img_src = image_assets.get(img_slot) or field_values.get(img_slot)
                     if isinstance(img_src, dict):
                         img_src = img_src.get("storage_path") or img_src.get("file_path") or img_src.get("url")
+                    if img_src and str(img_src) in used_replacement_files:
+                        continue
                     if img_src and os.path.exists(str(img_src)):
                         # Look for candidate image in relationships
                         found_target = False
@@ -309,6 +342,7 @@ class PackageLevelDocxEngine:
                                 cls._replace_media_file_bytes(m_path, str(img_src))
                                 images_replaced_count += 1
                                 replaced_images_set.add(b_name)
+                                used_replacement_files.add(str(img_src))
                                 found_target = True
                                 break
 
@@ -374,19 +408,30 @@ class PackageLevelDocxEngine:
             # Clean up unprovided optional image placeholders (e.g. IMAGE_2, IMAGE_3) in default template mode
             if field_mapping is None:
                 for opt_slot in ["image_1", "image_2", "image_3"]:
-                    if opt_slot not in image_assets and opt_slot not in field_values:
-                        opt_pats = [f"{{{{{opt_slot.upper()}}}}}", f"{{{{{opt_slot.lower()}}}}}"]
+                    if not image_assets.get(opt_slot) and not field_values.get(opt_slot):
+                        opt_pats = [
+                            f"{{{{{opt_slot.upper()}}}}}",
+                            f"{{{{{opt_slot.lower()}}}}}",
+                            f"{{{opt_slot.upper()}}}",
+                            f"{{{opt_slot.lower()}}}",
+                        ]
                         for xml_file in xml_files_to_process:
                             tree = ET.parse(xml_file)
                             root = tree.getroot()
                             cleaned = False
                             for p in root.xpath(".//w:p", namespaces=NS):
-                                for t in p.xpath(".//w:t", namespaces=NS):
-                                    if t.text:
-                                        for op in opt_pats:
-                                            if op in t.text:
-                                                t.text = t.text.replace(op, "")
-                                                cleaned = True
+                                run_nodes = []
+                                for r in p.xpath("./w:r", namespaces=NS):
+                                    for t in r.xpath("./w:t", namespaces=NS):
+                                        run_nodes.append((r, t))
+                                if not run_nodes:
+                                    continue
+                                full_p = "".join((t.text or "") for _, t in run_nodes)
+                                for op in opt_pats:
+                                    if op in full_p:
+                                        if cls._substitute_phrase_in_nodes(run_nodes, op, ""):
+                                            cleaned = True
+                                            full_p = "".join((t.text or "") for _, t in run_nodes)
                             if cleaned:
                                 tree.write(xml_file, encoding="utf-8", xml_declaration=True, standalone="yes")
 
@@ -529,8 +574,6 @@ class PackageLevelDocxEngine:
         for field_name, rep_val in replacements.items():
             if field_name in FIXED_ELEMENTS:
                 continue
-            if field_name == "project_title" and "project_title" in already_replaced:
-                continue
 
             patterns = [
                 f"{{{{{field_name.upper()}}}}}",
@@ -566,12 +609,29 @@ class PackageLevelDocxEngine:
                         # Multi-paragraph / list sibling expansion
                         parts = rep_val if is_list else [p.strip() for p in rep_val.split("\n") if p.strip()]
                         if len(parts) > 1:
+                            # Preserve section break (w:sectPr) if p_elem ended a section, but detach from intermediate nodes
+                            orig_sect_prs = p_elem.xpath("./w:pPr/w:sectPr", namespaces=NS) or p_elem.xpath("./w:sectPr", namespaces=NS)
+                            saved_sect_pr = None
+                            if orig_sect_prs:
+                                saved_sect_pr = copy.deepcopy(orig_sect_prs[0])
+                                for sp in orig_sect_prs:
+                                    sp.getparent().remove(sp)
+
                             first_part_str = f"{p0_prefix}{parts[0]}" if is_list else str(parts[0])
                             cls._substitute_phrase_in_nodes(run_text_nodes, pat, first_part_str)
                             current_node = p_elem
                             for idx, part in enumerate(parts[1:], start=2):
                                 prefix = f"[{idx}]  " if is_ref else "•   "
                                 new_p = copy.deepcopy(p_elem)
+
+                                # Strip unwanted page breaks and section breaks from cloned siblings
+                                for br in new_p.xpath(".//w:br[@w:type='page']", namespaces=NS):
+                                    br.getparent().remove(br)
+                                for pb in new_p.xpath(".//w:pageBreakBefore", namespaces=NS):
+                                    pb.getparent().remove(pb)
+                                for sp in (new_p.xpath("./w:pPr/w:sectPr", namespaces=NS) or new_p.xpath("./w:sectPr", namespaces=NS)):
+                                    sp.getparent().remove(sp)
+
                                 new_runs = new_p.xpath("./w:r", namespaces=NS)
                                 if new_runs:
                                     first_t = new_runs[0].xpath("./w:t", namespaces=NS)
@@ -583,6 +643,15 @@ class PackageLevelDocxEngine:
                                             extra_t.text = ""
                                 current_node.addnext(new_p)
                                 current_node = new_p
+
+                            # If original paragraph had a section break, re-attach it ONLY to the final cloned paragraph
+                            if saved_sect_pr is not None:
+                                p_pr = current_node.find(f"{{{NS['w']}}}pPr")
+                                if p_pr is None:
+                                    p_pr = ET.Element(f"{{{NS['w']}}}pPr")
+                                    current_node.insert(0, p_pr)
+                                p_pr.append(saved_sect_pr)
+
                             modified = True
                             newly_replaced.add(field_name)
                             break

@@ -15,32 +15,60 @@ logger = get_logger("service.template_resolver")
 DEFAULT_MASTER_TEMPLATE_PATH = os.path.abspath(".storage/templates/master_college_template.docx")
 
 
+def _validate_resolved_template(resolved_path: str, template_id: str) -> str:
+    """Enforces that the resolved template exists, is non-empty, and is strictly a .docx file."""
+    from fastapi import HTTPException
+    if not resolved_path:
+        raise HTTPException(status_code=404, detail=f"No template resolved for id '{template_id}'.")
+    if resolved_path.lower().endswith(".pdf"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Resolved template path '{resolved_path}' for id '{template_id}' is a PDF file. "
+                f"The original PDF must never be passed into the report-generation engine. "
+                f"A valid converted .docx template is required."
+            )
+        )
+    if not resolved_path.lower().endswith(".docx"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Resolved template '{resolved_path}' for id '{template_id}' is not a .docx document."
+        )
+    if not os.path.exists(resolved_path) or os.path.getsize(resolved_path) == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Resolved template DOCX does not exist or is empty: {resolved_path}"
+        )
+    return os.path.abspath(resolved_path)
+
+
 def resolve_selected_template_path(template_id: Optional[str] = None) -> Tuple[str, str]:
     """
     Deterministically resolves the user-selected college template .docx file path and template_id.
     Resolution priority:
     1. If template_id provided:
        a. If master preset: return DEFAULT_MASTER_TEMPLATE_PATH
-       b. Check custom_template_service / in-memory store
+       b. Check custom_template_service / in-memory store (prioritizing converted_docx_path)
        c. Check if template_id is a direct filesystem path
        d. Search .storage/templates recursively for matching directory/id
-       e. If NOT found: raise 404 error (NO silent fallback to old or wrong template)
+       e. If NOT found: raise 404 error (NO silent fallback to master or default template)
     2. If template_id not provided (None or empty):
        Default strictly to DEFAULT_MASTER_TEMPLATE_PATH (Institutional Master).
-       Never silently fall back to old user uploads or stale active_template_design stems.
+    HARD CONSTRAINT:
+       The returned path MUST be a validated .docx file. The original PDF is NEVER returned.
     Returns:
-        (template_file_path, resolved_template_id)
+        (template_docx_path, resolved_template_id)
     """
     from fastapi import HTTPException
 
     # 1. Master College Template Presets
     if template_id in ("00000000-0000-0000-0000-000000000001", "master-college-template", "master", "master_template"):
         if os.path.exists(DEFAULT_MASTER_TEMPLATE_PATH):
-            return DEFAULT_MASTER_TEMPLATE_PATH, "00000000-0000-0000-0000-000000000001"
+            return _validate_resolved_template(DEFAULT_MASTER_TEMPLATE_PATH, template_id), "00000000-0000-0000-0000-000000000001"
         fallback_web = os.path.abspath("apps/web/public/Project_Report_Final_IEEE.docx")
         if os.path.exists(fallback_web):
-            return fallback_web, "00000000-0000-0000-0000-000000000001"
-        return DEFAULT_MASTER_TEMPLATE_PATH, "00000000-0000-0000-0000-000000000001"
+            return _validate_resolved_template(fallback_web, template_id), "00000000-0000-0000-0000-000000000001"
+        return _validate_resolved_template(DEFAULT_MASTER_TEMPLATE_PATH, template_id), "00000000-0000-0000-0000-000000000001"
 
     # 2. Explicit template_id provided
     if template_id and template_id.strip():
@@ -51,24 +79,63 @@ def resolve_selected_template_path(template_id: Optional[str] = None) -> Tuple[s
             from apps.api.services.custom_template_service import custom_template_service
             cust = custom_template_service.get_template(tid)
             if cust:
-                c_path = cust.get("original_file_path") or cust.get("storage_path") or cust.get("path")
+                # Prioritize converted DOCX working copy
+                c_path = (
+                    cust.get("converted_docx_path")
+                    or cust.get("working_docx_path")
+                    or cust.get("file_path")
+                    or cust.get("path")
+                    or cust.get("storage_path")
+                    or cust.get("original_file_path")
+                )
                 if c_path and os.path.exists(c_path):
-                    resolved_abs = os.path.abspath(c_path)
+                    # If resolved path is PDF, force resolution of converted DOCX working copy
+                    if c_path.lower().endswith(".pdf"):
+                        working_cand = f"{os.path.splitext(c_path)[0]}_working.docx"
+                        if os.path.exists(working_cand):
+                            c_path = working_cand
+                        else:
+                            from apps.api.services.pdf_to_docx_service import pdf_to_docx_service
+                            w_path, _, _ = pdf_to_docx_service.convert_pdf_file_to_docx(c_path, working_cand)
+                            c_path = w_path
+
+                    resolved_abs = _validate_resolved_template(c_path, tid)
                     logger.info(f"[TEMPLATE-RESOLVER] Resolved via custom_template_service: {resolved_abs} for id={tid}")
                     return resolved_abs, tid
-                # Check relative to .storage
+
+                # Check relative to storage base
                 if c_path:
                     for prefix in [".storage", ".storage/templates"]:
                         rel_try = os.path.abspath(os.path.join(prefix, c_path))
                         if os.path.exists(rel_try):
-                            logger.info(f"[TEMPLATE-RESOLVER] Resolved via custom_template_service rel path: {rel_try} for id={tid}")
-                            return rel_try, tid
+                            if rel_try.lower().endswith(".pdf"):
+                                working_cand = f"{os.path.splitext(rel_try)[0]}_working.docx"
+                                if os.path.exists(working_cand):
+                                    rel_try = working_cand
+                                else:
+                                    from apps.api.services.pdf_to_docx_service import pdf_to_docx_service
+                                    w_path, _, _ = pdf_to_docx_service.convert_pdf_file_to_docx(rel_try, working_cand)
+                                    rel_try = w_path
+
+                            resolved_abs = _validate_resolved_template(rel_try, tid)
+                            logger.info(f"[TEMPLATE-RESOLVER] Resolved via custom_template_service rel path: {resolved_abs} for id={tid}")
+                            return resolved_abs, tid
+        except HTTPException:
+            raise
         except Exception as e:
             logger.debug(f"[TEMPLATE-RESOLVER] custom_template_service lookup note: {e}")
 
         # b. Check template_id as direct filesystem path
-        if os.path.exists(tid) and tid.lower().endswith(".docx"):
-            return os.path.abspath(tid), tid
+        if os.path.exists(tid):
+            if tid.lower().endswith(".docx"):
+                return _validate_resolved_template(tid, tid), tid
+            elif tid.lower().endswith(".pdf"):
+                working_cand = f"{os.path.splitext(tid)[0]}_working.docx"
+                if not os.path.exists(working_cand):
+                    from apps.api.services.pdf_to_docx_service import pdf_to_docx_service
+                    pdf_to_docx_service.convert_pdf_file_to_docx(tid, working_cand)
+                if os.path.exists(working_cand):
+                    return _validate_resolved_template(working_cand, tid), tid
 
         # c. Search .storage/templates recursively for directory matching template_id
         storage_base = os.path.abspath(".storage")
@@ -76,11 +143,22 @@ def resolve_selected_template_path(template_id: Optional[str] = None) -> Tuple[s
             for root, dirs, files in os.walk(storage_base):
                 if tid in root or tid in dirs:
                     t_dir = root if tid in root else os.path.join(root, tid)
-                    for f in os.listdir(t_dir):
-                        if f.lower().endswith(".docx"):
-                            cand = os.path.abspath(os.path.join(t_dir, f))
-                            logger.info(f"[TEMPLATE-RESOLVER] Resolved via storage dir walk: {cand} for id={tid}")
-                            return cand, tid
+                    # Prioritize .docx working copies first
+                    docx_files = [f for f in os.listdir(t_dir) if f.lower().endswith(".docx")]
+                    if docx_files:
+                        cand = os.path.abspath(os.path.join(t_dir, docx_files[0]))
+                        resolved_abs = _validate_resolved_template(cand, tid)
+                        logger.info(f"[TEMPLATE-RESOLVER] Resolved via storage dir walk: {resolved_abs} for id={tid}")
+                        return resolved_abs, tid
+                    # If only PDF exists, convert on-demand to working DOCX
+                    pdf_files = [f for f in os.listdir(t_dir) if f.lower().endswith(".pdf")]
+                    if pdf_files:
+                        pdf_cand = os.path.abspath(os.path.join(t_dir, pdf_files[0]))
+                        working_cand = f"{os.path.splitext(pdf_cand)[0]}_working.docx"
+                        from apps.api.services.pdf_to_docx_service import pdf_to_docx_service
+                        w_path, _, _ = pdf_to_docx_service.convert_pdf_file_to_docx(pdf_cand, working_cand)
+                        resolved_abs = _validate_resolved_template(w_path, tid)
+                        return resolved_abs, tid
 
         # d. Strict: if explicit template_id was requested but cannot be found, raise 404
         logger.error(f"[TEMPLATE-RESOLVER] Template '{tid}' was explicitly requested but could not be found.")
@@ -92,13 +170,13 @@ def resolve_selected_template_path(template_id: Optional[str] = None) -> Tuple[s
     # 3. No template_id provided: default strictly to master template
     if os.path.exists(DEFAULT_MASTER_TEMPLATE_PATH):
         logger.info(f"[TEMPLATE-RESOLVER] No template_id provided; using default master template: {DEFAULT_MASTER_TEMPLATE_PATH}")
-        return DEFAULT_MASTER_TEMPLATE_PATH, "00000000-0000-0000-0000-000000000001"
+        return _validate_resolved_template(DEFAULT_MASTER_TEMPLATE_PATH, "master"), "00000000-0000-0000-0000-000000000001"
 
     fallback_web = os.path.abspath("apps/web/public/Project_Report_Final_IEEE.docx")
     if os.path.exists(fallback_web):
-        return fallback_web, "00000000-0000-0000-0000-000000000001"
+        return _validate_resolved_template(fallback_web, "master"), "00000000-0000-0000-0000-000000000001"
 
-    return DEFAULT_MASTER_TEMPLATE_PATH, "00000000-0000-0000-0000-000000000001"
+    return _validate_resolved_template(DEFAULT_MASTER_TEMPLATE_PATH, "master"), "00000000-0000-0000-0000-000000000001"
 
 
 def is_zero_change_intent(text_or_inputs: str) -> bool:
