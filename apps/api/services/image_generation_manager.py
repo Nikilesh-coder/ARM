@@ -48,6 +48,8 @@ class ImageGenerationRequest(BaseModel):
     report_id: str = "default_run"
     style: str = "photorealistic"
     slot_id: Optional[str] = None
+    visual_composition: Optional[str] = None
+    key_concepts: List[str] = Field(default_factory=list)
 
 
 class ImageGenerationResponse(BaseModel):
@@ -70,6 +72,9 @@ class ReportImageRecord(BaseModel):
     sha256: str
     dhash: Optional[int] = None
     source: str
+    visual_composition: Optional[str] = None
+    key_concepts: List[str] = Field(default_factory=list)
+    prompt: Optional[str] = None
 
 
 class ImageGenerationManager:
@@ -90,6 +95,19 @@ class ImageGenerationManager:
 
     def get_last_diagnostics(self) -> List[str]:
         return list(self.last_diagnostics)
+
+    def get_used_compositions(self, report_id: str) -> List[str]:
+        if not report_id or report_id not in self._report_history:
+            return []
+        return [r.visual_composition for r in self._report_history[report_id] if r.visual_composition]
+
+    def get_used_concepts(self, report_id: str) -> List[str]:
+        if not report_id or report_id not in self._report_history:
+            return []
+        concepts = []
+        for r in self._report_history[report_id]:
+            concepts.extend(r.key_concepts)
+        return concepts
 
     @staticmethod
     def _compute_dhash(image_bytes: Optional[bytes]) -> Optional[int]:
@@ -186,6 +204,9 @@ class ImageGenerationManager:
         sha256: str,
         image_bytes: bytes,
         source: str,
+        visual_composition: Optional[str] = None,
+        key_concepts: Optional[List[str]] = None,
+        prompt: Optional[str] = None,
     ):
         """Registers generated/accepted image in report-level history for deduplication."""
         if not report_id:
@@ -200,6 +221,9 @@ class ImageGenerationManager:
                 sha256=sha256,
                 dhash=dhash,
                 source=source,
+                visual_composition=visual_composition,
+                key_concepts=key_concepts or [],
+                prompt=prompt,
             )
         )
 
@@ -304,6 +328,8 @@ class ImageGenerationManager:
                 "slide_heading": req.slide_heading,
                 "slide_matter_summary": " ".join(req.slide_matter.split()[:25]),
                 "visual_purpose": req.visual_purpose,
+                "visual_composition": req.visual_composition or "",
+                "key_concepts": req.key_concepts,
                 "sha256": sha256,
                 "dimensions": f"{req.width}x{req.height}",
             }
@@ -379,6 +405,9 @@ class ImageGenerationManager:
                 sha256=sha256_val,
                 image_bytes=img_bytes,
                 source=provider_name,
+                visual_composition=request.visual_composition,
+                key_concepts=request.key_concepts,
+                prompt=request.final_image_prompt,
             )
             logger.info(f"[ARM IMAGE MANAGER] Provider ({provider_name}) SUCCESS via {model_name}.")
             self.last_diagnostics = [f"{provider_name}: SUCCESS ({model_name})"]

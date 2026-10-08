@@ -250,13 +250,21 @@ class VisualEngine:
             reason = "Diagram synthesis fell back to photographic visual."
 
         # CASE D: REAL-WORLD AI PHOTOGRAPH
-        # Compile existing domain-aware prompt using gemini_visual_pipeline_service
+        # Query existing report-level visual context to enforce pre-generation diversity
+        used_comps = image_generation_manager.get_used_compositions(report_id)
+        used_concepts = image_generation_manager.get_used_concepts(report_id)
+
+        # Compile context-specific prompt using gemini_visual_pipeline_service
         req = gemini_visual_pipeline_service.compile_visual_requirement(
             project_title=project_title,
             slide_heading=slide_heading,
             slide_matter=slide_matter,
             slide_index=slide_number,
             project_description=project_description,
+            report_id=report_id,
+            slot_id=slot_id,
+            prior_compositions=used_comps,
+            prior_concepts=used_concepts,
         )
 
         img_req = ImageGenerationRequest(
@@ -275,6 +283,8 @@ class VisualEngine:
             output_path=final_out_path,
             report_id=report_id,
             slot_id=slot_id,
+            visual_composition=getattr(req, "visual_composition", None),
+            key_concepts=getattr(req, "key_concepts", []),
         )
 
         img_res = image_generation_manager.generate_image(img_req)

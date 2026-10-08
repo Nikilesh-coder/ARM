@@ -308,3 +308,136 @@ def test_6_cache_isolation_unrelated_slide_does_not_retrieve_prior_cache(tmp_pat
 
     cached_2 = manager._get_from_cache(req_slide_2)
     assert cached_2 is None, "Slide 2 must NOT hit Slide 1's cache entry!"
+
+
+def test_7_five_slide_contexts_materially_different_prompts_compositions_and_cache(tmp_path):
+    """
+    TEST 7: Regression test for the 5 required contexts:
+    1. AI Irrigation (Overview)
+    2. Soil Moisture Monitoring
+    3. IoT Architecture
+    4. Mobile Application
+    5. Water Management
+
+    Asserts:
+    - Extracted concepts are different.
+    - Compositions are different.
+    - Prompts are materially different.
+    - Cache keys are distinct across all 5.
+    - Exact duplicate request produces identical cache key.
+    """
+    cache_dir = str(tmp_path / "img_cache_7")
+    manager = ImageGenerationManager(cache_dir=cache_dir)
+    project_title = "AI Based Smart Irrigation System"
+
+    contexts = [
+        {
+            "name": "ai_irrigation",
+            "heading": "AI Irrigation Overview",
+            "matter": "Precision agriculture system utilizing edge artificial intelligence to optimize water efficiency across commercial crop fields.",
+            "slide_index": 1,
+            "expected_comp": "wide agricultural landscape",
+        },
+        {
+            "name": "soil_moisture",
+            "heading": "Soil Moisture Monitoring",
+            "matter": "Continuous monitoring of soil moisture using capacitive dielectric sensor probes inserted in root zone damp earth.",
+            "slide_index": 5,
+            "expected_comp": "sensor close-up",
+        },
+        {
+            "name": "iot_architecture",
+            "heading": "IoT Telemetry Architecture",
+            "matter": "Weatherproof ESP32 microcontroller enclosure and LoRa wireless gateway antenna transmitting field sensor data to cloud.",
+            "slide_index": 6,
+            "expected_comp": "IoT network/system visualization",
+        },
+        {
+            "name": "mobile_application",
+            "heading": "Mobile Application Interface",
+            "matter": "Farmer smartphone application dashboard displaying real-time soil moisture metrics, alerts, and remote valve controls.",
+            "slide_index": 7,
+            "expected_comp": "smartphone/mobile application interaction",
+        },
+        {
+            "name": "water_management",
+            "heading": "Water Delivery & Valve Management",
+            "matter": "Automated solenoid valve manifold and metered drip irrigation lateral lines regulating precise water flow to crops.",
+            "slide_index": 8,
+            "expected_comp": "irrigation infrastructure",
+        },
+    ]
+
+    compiled_reqs = []
+    prompts = []
+    compositions = []
+    concept_sets = []
+    cache_keys = []
+
+    for c in contexts:
+        req = gemini_visual_pipeline_service.compile_visual_requirement(
+            project_title=project_title,
+            slide_heading=c["heading"],
+            slide_matter=c["matter"],
+            slide_index=c["slide_index"],
+        )
+        compiled_reqs.append(req)
+        prompts.append(req.gemini_prompt)
+        compositions.append(req.visual_composition)
+        concept_sets.append(set(req.key_concepts))
+
+        # Check composition matches expected category
+        assert req.visual_composition == c["expected_comp"], (
+            f"Context {c['name']}: expected composition {c['expected_comp']}, got {req.visual_composition}"
+        )
+
+        # Build ImageGenerationRequest to verify cache key
+        img_req = ImageGenerationRequest(
+            project_title=project_title,
+            slide_number=c["slide_index"],
+            slide_heading=c["heading"],
+            slide_matter=c["matter"],
+            visual_purpose=req.slide_purpose,
+            final_image_prompt=req.gemini_prompt,
+            detected_domain=req.detected_domain,
+            visual_composition=req.visual_composition,
+            key_concepts=req.key_concepts,
+        )
+        cache_key = manager._compute_cache_key(img_req)
+        cache_keys.append(cache_key)
+
+    # 1. Compositions are all different across the 5 contexts
+    assert len(set(compositions)) == 5, f"Expected 5 unique compositions, got {compositions}"
+
+    # 2. Prompts are all materially different (no duplicates)
+    assert len(set(prompts)) == 5, "All 5 prompts must be unique!"
+
+    # Verify pairwise distinctness
+    for i in range(len(prompts)):
+        for j in range(i + 1, len(prompts)):
+            assert prompts[i] != prompts[j], f"Prompt {i} collides with Prompt {j}"
+
+    # 3. Extracted concepts are different
+    for i in range(len(concept_sets)):
+        for j in range(i + 1, len(concept_sets)):
+            assert concept_sets[i] != concept_sets[j], f"Concepts for {contexts[i]['name']} collide with {contexts[j]['name']}"
+
+    # 4. Cache keys are distinct across all 5 contexts
+    assert len(set(cache_keys)) == 5, "All 5 cache keys must be distinct!"
+    for key in cache_keys:
+        assert key.startswith("image_cache:v2:"), f"Invalid cache key prefix: {key}"
+
+    # 5. Exact duplicate request produces identical cache key
+    dup_req = ImageGenerationRequest(
+        project_title=project_title,
+        slide_number=contexts[1]["slide_index"],
+        slide_heading=contexts[1]["heading"],
+        slide_matter=contexts[1]["matter"],
+        visual_purpose=compiled_reqs[1].slide_purpose,
+        final_image_prompt=compiled_reqs[1].gemini_prompt,
+        detected_domain=compiled_reqs[1].detected_domain,
+        visual_composition=compiled_reqs[1].visual_composition,
+        key_concepts=compiled_reqs[1].key_concepts,
+    )
+    dup_key = manager._compute_cache_key(dup_req)
+    assert dup_key == cache_keys[1], "Exact duplicate request must produce identical cache key!"

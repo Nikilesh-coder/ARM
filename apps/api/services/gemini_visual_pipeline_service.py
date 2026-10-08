@@ -70,6 +70,10 @@ class SlideVisualRequirement(BaseModel):
     detected_domain: str = "general"
     domain_label: str = "General"
     domain_confidence: float = 1.0
+    visual_composition: str = "general"
+    camera_viewpoint: str = "eye-level viewpoint"
+    primary_subject: str = ""
+    secondary_elements: List[str] = Field(default_factory=list)
 
 
 class GeminiVisualPipelineService:
@@ -77,6 +81,50 @@ class GeminiVisualPipelineService:
     Core orchestrator for high-relevance Gemini visual generation in ARM.
     Guarantees every image represents the specific slide heading and matter.
     """
+
+    SUPPORTED_COMPOSITIONS = [
+        "wide agricultural landscape",
+        "aerial field view",
+        "close-up technical detail",
+        "sensor close-up",
+        "farmer interaction",
+        "equipment/system view",
+        "irrigation infrastructure",
+        "overhead crop-row view",
+        "smartphone/mobile application interaction",
+        "IoT network/system visualization",
+        "laboratory/technical setup",
+        "comparison scene",
+        "data-monitoring scene",
+    ]
+
+    ANTI_REPETITION_CONSTRAINTS = [
+        "generic agriculture stock image",
+        "generic farmer portrait",
+        "repeated farmer face",
+        "repeated camera angle",
+        "repeated composition",
+        "repeated background",
+        "generic irrigation field",
+        "generic AI agriculture image",
+        "same subject arrangement as previous images",
+    ]
+
+    VIEWPOINT_MAP = {
+        "wide agricultural landscape": "wide-angle panoramic eye-level landscape shot, deep depth of field under natural daylight",
+        "aerial field view": "elevated diagonal aerial viewpoint showcasing organized field sectors and irrigation zones",
+        "close-up technical detail": "macro technical close-up shot, crisp focus on mechanical and electronic components, shallow depth of field",
+        "sensor close-up": "ground-level macro close-up, shallow depth of field, sharp focus on sensor probe inserted in damp earth",
+        "farmer interaction": "documentary medium-shot perspective, natural daylight, authentic interaction with field equipment",
+        "equipment/system view": "eye-level three-quarters technical perspective showcasing assembled hardware equipment and connections",
+        "irrigation infrastructure": "low-angle perspective along precision drip lateral lines, control valves, and manifold across crop beds",
+        "overhead crop-row view": "top-down overhead perspective aligned directly above healthy crop rows and irrigation lateral lines",
+        "smartphone/mobile application interaction": "first-person / over-the-shoulder handheld viewpoint, clear outdoor daylight focus on mobile application screen",
+        "IoT network/system visualization": "eye-level medium technical shot, sharp focus on pole-mounted weatherproof enclosure and wireless antenna",
+        "laboratory/technical setup": "eye-level technical workbench shot, clean academic testing environment",
+        "comparison scene": "balanced side-by-side comparative composition showing distinct methods",
+        "data-monitoring scene": "crisp screen-focused perspective showing live field metrics and diagnostic charts",
+    }
 
     # Universal negative constraints to stop generic tropes and old template artifacts
     UNIVERSAL_NEGATIVE_CONSTRAINTS = [
@@ -493,6 +541,295 @@ class GeminiVisualPipelineService:
         return found_concepts[:5], found_objects[:4], subjects[:3]
 
     @classmethod
+    def extract_concrete_visual_concepts(
+        cls,
+        heading: str,
+        matter: str,
+        project_title: str,
+        domain: str = "dynamic_general",
+    ) -> Tuple[List[str], str, List[str], str]:
+        """
+        Extracts 3-6 concrete visual concepts from heading + matter,
+        preventing broad generic domain dominance.
+        Returns: (concepts, primary_subject, secondary_elements, environment).
+        """
+        heading = cls._normalize_str(heading)
+        matter = cls._normalize_str(matter)
+        project_title = cls._normalize_str(project_title)
+        h_low = heading.lower()
+        m_low = matter.lower()
+        comb_low = f"{h_low} {m_low}"
+
+        if domain == "irrigation":
+            # Priority 1: Check slide heading first
+            is_mobile = any(w in h_low for w in ("mobile", "app", "application", "dashboard", "alert", "interface", "smartphone", "ui", "screen", "handheld", "remote"))
+            is_iot = any(w in h_low for w in ("iot", "telemetry", "lora", "wireless", "gateway", "transmission", "antenna", "enclosure", "node", "architecture", "microcontroller", "esp32"))
+            is_water = any(w in h_low for w in ("water management", "valve", "solenoid", "manifold", "drip irrigation", "emitters", "lateral lines", "pump", "distribution", "actuator", "piping"))
+            is_solar = any(w in h_low for w in ("solar", "photovoltaic", "clean energy", "sunlight power"))
+            is_community = any(w in h_low for w in ("community", "farmer", "stakeholder", "training", "social", "village", "worker", "extension"))
+            is_moisture = any(w in h_low for w in ("moisture", "capacitive", "probe", "sensor probe", "salinity", "corrosion", "strata", "vwc", "soil depth")) or ("soil" in h_low and "sensor" in h_low)
+            is_problem = any(w in h_low for w in ("problem", "challenge", "deficit", "scarcity", "wastage", "drought", "parched", "traditional", "manual", "flood"))
+            is_overview = any(w in h_low for w in ("intro", "overview", "conclusion", "summary", "title", "about", "what is"))
+
+            # Priority 2: Fall back to combined heading + matter
+            if not (is_mobile or is_iot or is_water or is_solar or is_community or is_moisture or is_problem or is_overview):
+                is_mobile = any(w in comb_low for w in ("mobile", "app", "application", "dashboard", "alert", "interface", "smartphone", "ui", "screen", "handheld", "remote"))
+                is_iot = any(w in comb_low for w in ("iot", "telemetry", "lora", "wireless", "gateway", "transmission", "antenna", "enclosure", "node", "architecture", "microcontroller", "esp32"))
+                is_water = any(w in comb_low for w in ("water management", "valve", "solenoid", "manifold", "drip irrigation", "emitters", "lateral lines", "pump", "distribution", "actuator", "piping"))
+                is_solar = any(w in comb_low for w in ("solar", "photovoltaic", "clean energy", "sunlight power"))
+                is_community = any(w in comb_low for w in ("community", "farmer", "stakeholder", "training", "social", "village", "worker", "extension"))
+                is_moisture = any(w in comb_low for w in ("moisture", "capacitive", "probe", "sensor probe", "salinity", "corrosion", "strata", "vwc", "soil depth")) or ("soil" in comb_low and "sensor" in comb_low)
+                is_problem = any(w in comb_low for w in ("problem", "challenge", "deficit", "scarcity", "wastage", "drought", "parched", "traditional", "manual", "flood"))
+
+            if is_moisture:
+                concepts = [
+                    "soil moisture sensor in ground",
+                    "sensor probe inserted in damp earth",
+                    "capacitive moisture probe prongs",
+                    "compact field datalogger near plant base",
+                    "root zone moisture detection",
+                ]
+                primary_subject = "capacitive soil moisture sensor probe inserted into damp agricultural earth at plant root zone"
+                secondary_elements = ["dark moist soil texture", "base of healthy green crop plant", "low-profile weatherproof sensor wiring leading out of frame"]
+                environment = "ground-level agricultural crop row soil bed under natural diffused daylight"
+
+            elif is_iot:
+                concepts = [
+                    "outdoor IoT wireless gateway node",
+                    "weatherproof microcontroller enclosure",
+                    "transceiver antenna on mounting pole",
+                    "solar power telemetry module",
+                    "field sensor wire interface",
+                ]
+                primary_subject = "outdoor IoT wireless telemetry gateway node and weatherproof enclosure mounted on metal pole"
+                secondary_elements = ["transceiver communication antenna", "compact solar panel powering node", "weatherproof cable gland fittings", "monitored crop field in background"]
+                environment = "precision agricultural crop field overlooking cultivated rows under clear daytime sky"
+
+            elif is_mobile:
+                concepts = [
+                    "farmer checking smartphone irrigation app in field",
+                    "hand holding mobile phone with irrigation dashboard",
+                    "clean agricultural control UI on phone screen",
+                    "farmer adjusting watering schedule from app",
+                    "field-tested mobile application interface",
+                ]
+                primary_subject = "handheld modern smartphone actively displaying clean agricultural irrigation dashboard and telemetry UI"
+                secondary_elements = ["farmer's hands holding device", "crisp readable application screen showing moisture levels", "blurred green crop field in soft background"]
+                environment = "sunlit agricultural crop field under bright natural outdoor daylight"
+
+            elif is_water:
+                concepts = [
+                    "automated drip irrigation valve assembly",
+                    "precision solenoid valve controlling water flow",
+                    "metered drip irrigation lateral lines",
+                    "subsurface drip emitters watering crop rows",
+                    "irrigation manifold and pressure regulator",
+                ]
+                primary_subject = "automated irrigation manifold assembly with precision solenoid valves controlling water delivery"
+                secondary_elements = ["black drip irrigation lateral tubing running along crop beds", "brass water flow meter", "pressure regulator gauges", "hydrated crop root zone"]
+                environment = "organized commercial agricultural farm plot with active drip lateral lines under crisp morning sunlight"
+
+            elif is_solar:
+                concepts = [
+                    "dedicated photovoltaic solar panel array for farm",
+                    "solar-powered agricultural water pump inverter",
+                    "centrifugal pump connected to solar array",
+                    "off-grid sustainable irrigation power system",
+                ]
+                primary_subject = "photovoltaic solar panel array powering dedicated agricultural water pump system"
+                secondary_elements = ["solar pump controller inverter box", "heavy-duty water delivery piping", "sunlit crop rows in distance"]
+                environment = "sunlit open agricultural field with solar array oriented towards bright natural sunlight"
+
+            elif is_community:
+                concepts = [
+                    "agricultural extension specialist demonstrating smart irrigation to local farmers",
+                    "farmers inspecting healthy crop root zone and drip emitters",
+                    "field training session on irrigation telemetry",
+                    "hands-on calibration of field sensors",
+                ]
+                primary_subject = "local agricultural farmers and field specialist examining active drip irrigation and crop health"
+                secondary_elements = ["agronomist field tablet", "active drip lateral lines", "healthy nourished crops"]
+                environment = "rural agricultural field setting with local farming community members under natural daylight"
+
+            elif is_problem:
+                concepts = [
+                    "parched dry agricultural earth texture",
+                    "water-stressed crops under intense sunlight",
+                    "inefficient manual furrow irrigation channels",
+                    "aquifer depletion and water wastage evidence",
+                ]
+                primary_subject = "parched cracked agricultural soil bed and water-stressed crop plants"
+                secondary_elements = ["fissured dry soil ground", "wilted leaf edges", "harsh direct sunlight"]
+                environment = "parched agricultural field under intense harsh sun demonstrating severe water deficit"
+
+            # 8. General / Overview / Default Agriculture
+            else:
+                concepts = [
+                    "smart precision agricultural farm landscape",
+                    "automated drip irrigation lines in crop rows",
+                    "overview of monitored smart field plot",
+                    "sustainable commercial crop rows with modern irrigation",
+                ]
+                primary_subject = "expansive modern precision agricultural farm with automated drip irrigation lines and thriving crops"
+                secondary_elements = ["neatly cultivated crop rows stretching into background", "low-profile field telemetry hardware", "vibrant green healthy foliage"]
+                environment = "sunlit fertile commercial agricultural farmland under clear open sky with soft natural daylight"
+
+        else:
+            # Dynamic concept extraction for non-agriculture domains
+            anchor = cls._extract_domain_anchor(project_title)
+            tokens = [w for w in re.findall(r"\b[a-zA-Z]{4,}\b", f"{heading} {matter}") if w.lower() not in {"this", "that", "with", "from", "have", "been", "using", "system"}]
+            top_tokens = tokens[:4] if tokens else [anchor]
+            concepts = [
+                f"{domain} {t} component" for t in top_tokens
+            ] + [f"{anchor} operational workflow", f"{heading.lower()} technical instrumentation"]
+            primary_subject = f"operational {heading.lower()} setup for {anchor}"
+            secondary_elements = [f"{t} interface" for t in top_tokens[:3]]
+            environment = f"professional {domain} institutional setting with modern operational technology"
+
+        return concepts[:6], primary_subject, secondary_elements[:4], environment
+
+    @classmethod
+    def select_deterministic_composition(
+        cls,
+        heading: str,
+        matter: str,
+        concepts: List[str],
+        slot_id: Optional[str] = None,
+        slide_index: int = 1,
+        prior_compositions: Optional[List[str]] = None,
+        domain: str = "dynamic_general",
+    ) -> Tuple[str, str]:
+        """
+        Deterministically maps slide context to one of the 13 supported compositions
+        and assigns a corresponding camera viewpoint, checking against prior_compositions
+        to eliminate repetitive compositions within the same report.
+        """
+        h_low = heading.lower()
+        m_low = matter.lower()
+        comb_low = f"{h_low} {m_low}"
+        priors = set(prior_compositions or [])
+
+        # Priority 1: Slide Heading Takes Highest Precedence
+        if any(w in h_low for w in ("mobile", "app", "application", "smartphone", "handheld", "ui", "dashboard", "screen")):
+            candidates = ["smartphone/mobile application interaction", "data-monitoring scene", "farmer interaction"]
+        elif any(w in h_low for w in ("iot", "wireless", "telemetry", "gateway", "network", "node", "antenna", "enclosure", "lora", "architecture")):
+            candidates = ["IoT network/system visualization", "equipment/system view", "close-up technical detail"]
+        elif any(w in h_low for w in ("sensor", "probe", "moisture", "capacitive", "salinity", "corrosion", "strata")):
+            candidates = ["sensor close-up", "close-up technical detail", "equipment/system view"]
+        elif any(w in h_low for w in ("valve", "manifold", "drip", "pipe", "pump", "irrigation infrastructure", "solenoid", "water management")):
+            candidates = ["irrigation infrastructure", "equipment/system view", "overhead crop-row view"]
+        elif any(w in h_low for w in ("community", "farmer", "training", "social", "village", "worker", "human", "extension")):
+            candidates = ["farmer interaction", "wide agricultural landscape", "equipment/system view"]
+        elif any(w in h_low for w in ("intro", "overview", "conclusion", "summary", "title", "about", "what is")) or slide_index == 1:
+            candidates = ["wide agricultural landscape", "aerial field view", "overhead crop-row view", "equipment/system view"]
+        elif any(w in h_low for w in ("comparison", "traditional", "existing vs", "manual vs", "conventional", "vs smart")):
+            candidates = ["comparison scene", "equipment/system view", "wide agricultural landscape"]
+        elif any(w in h_low for w in ("result", "metric", "performance", "benchmark", "saving", "efficiency", "analytics")):
+            candidates = ["data-monitoring scene", "close-up technical detail", "equipment/system view"]
+        # Priority 2: Slide Matter Fallback
+        elif any(w in comb_low for w in ("mobile", "app", "application", "smartphone", "handheld", "ui", "dashboard", "screen")):
+            candidates = ["smartphone/mobile application interaction", "data-monitoring scene", "farmer interaction"]
+        elif any(w in comb_low for w in ("iot", "wireless", "telemetry", "gateway", "network", "node", "antenna", "enclosure", "lora")):
+            candidates = ["IoT network/system visualization", "equipment/system view", "close-up technical detail"]
+        elif any(w in comb_low for w in ("sensor", "probe", "moisture", "capacitive", "salinity", "corrosion", "strata")):
+            candidates = ["sensor close-up", "close-up technical detail", "equipment/system view"]
+        elif any(w in comb_low for w in ("valve", "manifold", "drip", "pipe", "pump", "irrigation infrastructure", "solenoid", "water management")):
+            candidates = ["irrigation infrastructure", "equipment/system view", "overhead crop-row view"]
+        elif any(w in comb_low for w in ("community", "farmer", "training", "social", "village", "worker", "human", "extension")):
+            candidates = ["farmer interaction", "wide agricultural landscape", "equipment/system view"]
+        elif any(w in comb_low for w in ("comparison", "traditional", "existing vs", "manual vs", "conventional", "vs smart")):
+            candidates = ["comparison scene", "equipment/system view", "wide agricultural landscape"]
+        elif any(w in comb_low for w in ("result", "metric", "performance", "benchmark", "saving", "efficiency", "analytics")):
+            candidates = ["data-monitoring scene", "close-up technical detail", "equipment/system view"]
+        elif any(w in comb_low for w in ("lab", "laboratory", "testbed", "bench", "prototype", "circuit")):
+            candidates = ["laboratory/technical setup", "close-up technical detail", "equipment/system view"]
+        elif any(w in comb_low for w in ("aerial", "drone", "high-angle", "acres", "elevation", "broad")):
+            candidates = ["aerial field view", "overhead crop-row view", "wide agricultural landscape"]
+        elif any(w in comb_low for w in ("overhead", "crop row", "rows", "bed", "lateral lines")):
+            candidates = ["overhead crop-row view", "wide agricultural landscape", "irrigation infrastructure"]
+        else:
+            candidates = ["equipment/system view", "wide agricultural landscape", "close-up technical detail"]
+
+        # Filter out agriculture-specific compositions if non-agriculture domain
+        if domain != "irrigation":
+            agri_comps = {"wide agricultural landscape", "overhead crop-row view", "farmer interaction", "irrigation infrastructure", "aerial field view"}
+            candidates = [c for c in candidates if c not in agri_comps]
+            if not candidates:
+                candidates = ["equipment/system view", "close-up technical detail", "data-monitoring scene"]
+            supported = [c for c in cls.SUPPORTED_COMPOSITIONS if c not in agri_comps]
+        else:
+            supported = cls.SUPPORTED_COMPOSITIONS
+
+        # Pick first candidate not already used
+        chosen = None
+        for cand in candidates:
+            if cand not in priors:
+                chosen = cand
+                break
+
+        # If all candidates used, pick any supported composition not in priors
+        if not chosen:
+            for cand in supported:
+                if cand not in priors:
+                    chosen = cand
+                    break
+
+        # If all have been used, pick candidate deterministically by slide_index / slot_id
+        if not chosen:
+            seed = slide_index + (abs(hash(slot_id)) % 7 if slot_id else 0)
+            chosen = supported[seed % len(supported)]
+
+        viewpoint = cls.VIEWPOINT_MAP.get(
+            chosen,
+            "Clear eye-level technical perspective, balanced natural daylight, sharp depth of field"
+        )
+        return chosen, viewpoint
+
+    @classmethod
+    def assemble_context_specific_prompt(
+        cls,
+        primary_subject: str,
+        secondary_elements: List[str],
+        environment: str,
+        visual_composition: str,
+        camera_viewpoint: str,
+        slide_heading: str,
+        slide_matter: str,
+        project_title: str,
+        visual_type: str = "REALISTIC_PHOTO",
+        visual_style: str = "natural crisp photography, daylight, sharp depth of field",
+        domain: str = "dynamic_general",
+    ) -> str:
+        """
+        Assembles structured prompt with the required 7-section format and anti-repetition constraints.
+        """
+        clean_matter = " ".join(slide_matter.split()[:40]) if slide_matter else slide_heading
+        elements_str = ", ".join(secondary_elements) if secondary_elements else "technical field components"
+        
+        if domain == "irrigation":
+            anti_rep = cls.ANTI_REPETITION_CONSTRAINTS
+        else:
+            anti_rep = [c for c in cls.ANTI_REPETITION_CONSTRAINTS if not any(w in c.lower() for w in ("agriculture", "farmer", "farm", "irrigation"))]
+        
+        all_negatives = anti_rep + cls.UNIVERSAL_NEGATIVE_CONSTRAINTS
+
+        prompt = (
+            f"PRIMARY SUBJECT: {primary_subject}\n"
+            f"SECONDARY ELEMENTS: {elements_str}\n"
+            f"ENVIRONMENT: {environment}\n"
+            f"VISUAL COMPOSITION: {visual_composition}\n"
+            f"CAMERA/VIEWPOINT: {camera_viewpoint}\n"
+            f"RELATION TO SLIDE MATTER: The visual directly illustrates '{clean_matter}' for '{slide_heading}'.\n"
+            f"PROJECT CONTEXT: {project_title}\n\n"
+            f"Professional, realistic {visual_type.replace('_', ' ').lower()} for an academic presentation slide titled \"{slide_heading}\". "
+            f"Depicting {primary_subject} in {environment}. Featuring {elements_str}. "
+            f"Shot with a {visual_composition} composition from a {camera_viewpoint}. {visual_style}. "
+            f"High optical clarity, authentic real-world textures, uncluttered presentation quality.\n\n"
+            f"Negative Constraints (CRITICAL): Do NOT include any {', '.join(all_negatives)}."
+        )
+        return prompt
+
+    @classmethod
     def compile_visual_requirement(
         cls,
         project_title: str,
@@ -500,6 +837,10 @@ class GeminiVisualPipelineService:
         slide_matter: str,
         slide_index: int = 1,
         project_description: str = "",
+        report_id: Optional[str] = None,
+        slot_id: Optional[str] = None,
+        prior_compositions: Optional[List[str]] = None,
+        prior_concepts: Optional[List[str]] = None,
     ) -> SlideVisualRequirement:
         """
         Compiles the authoritative SlideVisualRequirement (Step 1).
@@ -1227,9 +1568,28 @@ class GeminiVisualPipelineService:
             if obj not in objects and len(objects) < 5:
                 objects.append(obj)
 
-        # Build dynamic prompt (Step 4)
-        clean_matter = " ".join(slide_matter.split()[:40]) if slide_matter else ""
-        matter_context = f"The slide explains: '{clean_matter}'." if clean_matter else ""
+        # Extract concrete concepts, primary subject, and secondary elements
+        concrete_concepts, prim_subj, sec_elems, env_context = cls.extract_concrete_visual_concepts(
+            heading=slide_heading,
+            matter=slide_matter,
+            project_title=project_title,
+            domain=domain,
+        )
+
+        # Select deterministic composition and camera viewpoint with report-level collision avoidance
+        vis_comp, cam_viewpoint = cls.select_deterministic_composition(
+            heading=slide_heading,
+            matter=slide_matter,
+            concepts=concrete_concepts,
+            slot_id=slot_id,
+            slide_index=slide_index,
+            prior_compositions=prior_compositions,
+            domain=domain,
+        )
+
+        # Prioritize concrete primary subject
+        primary_subject = prim_subj if prim_subj else (subjects[0] if subjects else f"operational {slide_heading}")
+        secondary_elements = sec_elems if sec_elems else (objects[:4] if objects else [])
 
         # Display purpose formatted appropriately for domain
         if purpose == SlideVisualPurpose.SOIL_MOISTURE_MONITORING and domain != "irrigation":
@@ -1248,19 +1608,21 @@ class GeminiVisualPipelineService:
         else:
             disp_purpose = purpose.replace('_', ' ').title()
 
-        gemini_prompt = (
-            f"Create a high-quality {v_type.replace('_', ' ')} for an academic presentation slide titled \"{slide_heading}\".\n\n"
-            f"Project Context: {project_title}.\n"
-            f"Slide Heading: {slide_heading}.\n"
-            f"Slide Purpose: {disp_purpose}.\n"
-            f"{matter_context}\n\n"
-            f"Required Subjects: {', '.join(subjects)}.\n"
-            f"Key Objects in Scene: {', '.join(objects)}.\n"
-            f"Environment: {env}.\n"
-            f"Visual Style: {v_style}.\n"
-            f"Composition: Academic presentation ready, distinct focal perspective, uncluttered, professional natural lighting.\n\n"
-            f"Negative Constraints (CRITICAL): Do NOT include any {', '.join(cls.UNIVERSAL_NEGATIVE_CONSTRAINTS)}."
+        gemini_prompt = cls.assemble_context_specific_prompt(
+            primary_subject=primary_subject,
+            secondary_elements=secondary_elements,
+            environment=env,
+            visual_composition=vis_comp,
+            camera_viewpoint=cam_viewpoint,
+            slide_heading=slide_heading,
+            slide_matter=slide_matter,
+            project_title=project_title,
+            visual_type=v_type,
+            visual_style=v_style,
+            domain=domain,
         )
+
+        final_concepts = concrete_concepts if concrete_concepts else concepts
 
         return SlideVisualRequirement(
             project_title=project_title,
@@ -1268,7 +1630,7 @@ class GeminiVisualPipelineService:
             slide_heading=slide_heading,
             slide_matter=slide_matter,
             slide_purpose=purpose,
-            key_concepts=concepts,
+            key_concepts=final_concepts,
             visual_type=v_type,
             required_subjects=subjects,
             required_objects=objects,
@@ -1280,6 +1642,10 @@ class GeminiVisualPipelineService:
             detected_domain=domain,
             domain_label=domain_label,
             domain_confidence=confidence,
+            visual_composition=vis_comp,
+            camera_viewpoint=cam_viewpoint,
+            primary_subject=primary_subject,
+            secondary_elements=secondary_elements,
         )
 
     @classmethod
