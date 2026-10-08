@@ -35,7 +35,7 @@ interface WorkspaceMessage {
   timestamp: string;
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
 
 function cleanTopicToAcademicTitle(raw: string): string {
   let cleaned = (raw || "").trim();
@@ -456,7 +456,10 @@ export default function ArmWorkspacePage() {
         console.warn("Backend generation failed:", err);
         let msg = err?.message || "Generation request failed.";
         if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
-          msg = `Could not connect to ARM backend at ${API_BASE_URL}. Please ensure the FastAPI server is running on port 8000.`;
+          const isLocal = API_BASE_URL.includes("localhost") || API_BASE_URL.includes("127.0.0.1");
+          msg = isLocal
+            ? `Could not connect to ARM backend at ${API_BASE_URL}. Please ensure the local FastAPI server is running on port 8000. (${err?.message || "Failed to fetch"})`
+            : `Could not connect to ARM backend at ${API_BASE_URL}. The backend service may be waking up from sleep or experiencing network latency. (${err?.message || "Failed to fetch"})`;
         }
         return { _error: msg };
       });

@@ -528,6 +528,11 @@ def download_raw_template(
         }
     )
 
+@router.get("/templates/active-design")
+def get_current_active_design():
+    from apps.api.services.document.template_extractor import get_active_template_design
+    return get_active_template_design()
+
 
 @router.get("/templates/{template_id}/details", response_model=Dict[str, Any])
 @router.get("/templates/{template_id}", response_model=Dict[str, Any])
@@ -1277,12 +1282,6 @@ async def convert_template_to_json(file: UploadFile = File(None)):
         "message": f"Template design extracted from '{filename}' and stored internally in JSON contract.",
         "design": design
     }
-
-
-@router.get("/templates/active-design")
-def get_current_active_design():
-    return get_active_template_design()
-
 
 @router.post("/templates/template-copy-test")
 async def template_copy_test(file: UploadFile = File(...)):

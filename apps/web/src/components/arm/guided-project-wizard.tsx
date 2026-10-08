@@ -375,7 +375,7 @@ export function GuidedProjectWizard({
     let realReportId = "";
     let genError: string | null = null;
     try {
-      const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+      const apiBase = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
       const cleanProjTitle = title || "ELECTRIFY THE FUTURE: PROMOTING SAFE ELECTRICITY USE IN SCHOOLS";
       const response = await fetch(`${apiBase}/api/v1/reports/generate`, {
         method: "POST",
