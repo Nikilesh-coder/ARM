@@ -100,7 +100,9 @@ class AppSettings(BaseModel):
             "http://localhost:3000",
             "http://127.0.0.1:3000",
             "http://localhost:8000",
-            "http://127.0.0.1:8000"
+            "http://127.0.0.1:8000",
+            "https://arm-caw2.vercel.app",
+            "https://arm-caw2-bjirdzwu5-arm-88c2.vercel.app",
         ]
 
         # Add FRONTEND_URL (e.g. https://arm-frontend.vercel.app)
