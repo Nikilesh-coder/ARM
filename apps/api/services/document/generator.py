@@ -256,7 +256,7 @@ def create_full_academic_report(
         "output_path": active_docx,
         "pdf_path": None,
         "file_size_bytes": file_size,
-        "download_url": f"http://localhost:8000/api/v1/reports/{report_id}/download",
+        "download_url": f"{os.getenv('BACKEND_URL', 'https://arm-backend-031f.onrender.com')}/api/v1/reports/{report_id}/download",
         "pdf_download_url": None,
         "preview_sections": preview_sections,
         "status": "completed",
@@ -939,7 +939,7 @@ def create_full_academic_report(
         "output_path": output_path,
         "pdf_path": None,
         "file_size_bytes": file_size,
-        "download_url": f"http://localhost:8000/api/v1/reports/{report_id}/download",
+        "download_url": f"{os.getenv('BACKEND_URL', 'https://arm-backend-031f.onrender.com')}/api/v1/reports/{report_id}/download",
         "pdf_download_url": None,
         "preview_sections": preview_sections
     }

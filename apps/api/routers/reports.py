@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -115,13 +115,15 @@ class GenerateReportRequest(BaseModel):
 
 
 @router.post("/generate")
-def generate_full_report(req: GenerateReportRequest):
+def generate_full_report(req: GenerateReportRequest, request: Request = None):
     """
     Generates a full academic report strictly grounded in the Master College Template
     or custom user-uploaded college template using the template-preserving in-place replacement engine.
     Never redesigns, reconstructs, or recreates the college template from scratch.
     For zero-change requests: returns an exact raw copy of the selected template directly.
     """
+    req_base = str(request.base_url).rstrip("/") if (request and request.base_url) else ""
+    backend_base_url = req_base if (req_base and "localhost" not in req_base and "127.0.0.1" not in req_base) else os.getenv("BACKEND_URL", "https://arm-backend-031f.onrender.com")
     import shutil
     import hashlib
     from apps.api.services.template_resolver import resolve_selected_template_path, is_zero_change_intent
@@ -387,7 +389,7 @@ def generate_full_report(req: GenerateReportRequest):
                 "output_path": final_docx_path,
                 "pdf_path": None,
                 "file_size_bytes": len(dst_bytes),
-                "download_url": f"http://localhost:8000/api/v1/reports/{report_id}/download",
+                "download_url": f"{backend_base_url}/api/v1/reports/{report_id}/download",
                 "pdf_download_url": None,
                 "preview_sections": preview_sections,
                 "status": "completed",
@@ -539,7 +541,7 @@ def generate_full_report(req: GenerateReportRequest):
             "storage_key": storage_key,
             "pdf_path": None,
             "file_size_bytes": file_size,
-            "download_url": f"http://localhost:8000/api/v1/reports/{report_id}/download",
+            "download_url": f"{backend_base_url}/api/v1/reports/{report_id}/download",
             "pdf_download_url": None,
             "preview_sections": preview_sections,
             "status": "completed",

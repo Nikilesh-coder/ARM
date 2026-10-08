@@ -406,7 +406,10 @@ export default function ArmWorkspacePage() {
     }
 
     const reportId = generatedData.report_id || generatedData.job_id || generatedData.document_id;
-    const downloadUrl = generatedData.download_url || `${API_BASE_URL}/api/v1/reports/${reportId}/download`;
+    const downloadUrl =
+      generatedData.download_url && !generatedData.download_url.includes("localhost") && !generatedData.download_url.includes("127.0.0.1")
+        ? generatedData.download_url
+        : `${API_BASE_URL}/api/v1/reports/${reportId}/download`;
     const fileName = generatedData.file_name || `Report_${reportId}.docx`;
     const fileSize = generatedData.file_size_bytes || 41192;
 
