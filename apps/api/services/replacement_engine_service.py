@@ -1164,10 +1164,13 @@ class ReplacementEngineService:
         # - If any check fails, FAIL THE REPORT instead of returning unchanged template.
         num_requested_images = len(images_to_generate) if ("images_to_generate" in locals() and images_to_generate) else 0
         if num_requested_images > 0 and len(synth_map) == 0 and job_record.get("images_replaced", 0) == 0:
+            from apps.api.services.image_generation_manager import image_generation_manager
+            diags = image_generation_manager.get_last_diagnostics()
+            diag_str = "; ".join(diags) if diags else "Image providers failed or quota exhausted"
             err_msg = (
                 f"Image replacement validation failed: {num_requested_images} replacement images were requested, "
                 f"but 0 new images were successfully generated or replaced into the template. "
-                f"Image providers failed or quota exhausted. Aborting report to prevent returning unchanged template."
+                f"Provider diagnostics: [{diag_str}]. Aborting report to prevent returning unchanged template."
             )
             logger.error(f"[{job_id}] {err_msg}")
             report_file_storage_service.record_failed_generation(

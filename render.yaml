@@ -56,6 +56,10 @@ services:
         sync: false
       - key: CLOUDFLARE_API_TOKEN
         sync: false
+      - key: CLOUDFLARE_WORKER_URL
+        value: "https://image-api.2024csm-r260.workers.dev/"
+      - key: CLOUDFLARE_WORKER_API_KEY
+        sync: false
       - key: HF_TOKEN
         sync: false
       - key: TOGETHER_API_KEY

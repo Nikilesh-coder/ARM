@@ -50,9 +50,16 @@ class ProviderHealthRecord:
         self.last_status_code = status_code
         self.failure_count += 1
         self.status = "COOLDOWN"
-        self.cooldown_duration = float(
-            os.getenv("ARM_IMAGE_PROVIDER_COOLDOWN_SECONDS", DEFAULT_COOLDOWN_SECONDS)
-        )
+        default_dur = float(os.getenv("ARM_IMAGE_PROVIDER_COOLDOWN_SECONDS", DEFAULT_COOLDOWN_SECONDS))
+        if is_exhausted or status_code in (402, 429):
+            # Quota or credit exhaustion: persistent cooldown
+            self.cooldown_duration = max(300.0, default_dur)
+        elif status_code and 500 <= status_code < 600:
+            # Temporary server error: 60s cooldown
+            self.cooldown_duration = min(60.0, default_dur)
+        else:
+            self.cooldown_duration = default_dur
+
         logger.warning(
             f"[ARM PROVIDER HEALTH] Provider '{self.name}' entered COOLDOWN for {self.cooldown_duration}s. Reason: {reason} (Code: {status_code})"
         )
@@ -75,6 +82,11 @@ class ProviderHealthRecord:
             "failure_reason": self.failure_reason,
             "last_status_code": self.last_status_code,
         }
+
+    def get_diagnostic(self) -> str:
+        code_str = f"HTTP {self.last_status_code}" if self.last_status_code else "failed"
+        reason_str = f": {self.failure_reason}" if self.failure_reason else ""
+        return f"{self.name}: {code_str}{reason_str}"
 
 
 class ImageProviderHealthManager:

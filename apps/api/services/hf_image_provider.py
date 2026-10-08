@@ -160,6 +160,15 @@ class HFImageProvider:
                     logger.warning(
                         f"[HF IMAGE PROVIDER] Model {target_model} on provider {prov} failed with HTTP {status_code}: {hf_err}"
                     )
+                    from apps.api.services.image_provider_cooldown import image_provider_health_manager
+                    is_exhausted = status_code in (402, 429)
+                    reason_label = "credits exhausted" if status_code == 402 else ("quota exhausted" if status_code == 429 else f"HTTP {status_code}")
+                    image_provider_health_manager.record_failure(
+                        "huggingface",
+                        reason=f"{status_code} {reason_label}",
+                        status_code=status_code,
+                        is_exhausted=is_exhausted,
+                    )
                     # If 429 (Rate Limit / Quota) or 402/403 (Payment/Quota Required):
                     if status_code in (429, 402, 403):
                         logger.error(
@@ -173,7 +182,18 @@ class HFImageProvider:
 
                 except Exception as ex:
                     logger.warning(f"[HF IMAGE PROVIDER] Model {target_model} on provider {prov} error: {ex}")
+                    from apps.api.services.image_provider_cooldown import image_provider_health_manager
+                    image_provider_health_manager.record_failure(
+                        "huggingface",
+                        reason=f"error: {str(ex)[:100]}",
+                    )
                     continue
 
+        from apps.api.services.image_provider_cooldown import image_provider_health_manager
+        if image_provider_health_manager.is_available("huggingface"):
+            image_provider_health_manager.record_failure(
+                "huggingface",
+                reason="all candidate models failed",
+            )
         logger.error("[HF IMAGE PROVIDER] All candidate models/providers failed. Returning None (NO GRAPH FALLBACK).")
         return None

@@ -86,6 +86,10 @@ class ImageGenerationManager:
         self.cache_dir = cache_dir
         os.makedirs(self.cache_dir, exist_ok=True)
         self._report_history: Dict[str, List[ReportImageRecord]] = {}
+        self.last_diagnostics: List[str] = []
+
+    def get_last_diagnostics(self) -> List[str]:
+        return list(self.last_diagnostics)
 
     @staticmethod
     def _compute_dhash(image_bytes: Optional[bytes]) -> Optional[int]:
@@ -320,12 +324,18 @@ class ImageGenerationManager:
             f"Domain: {request.detected_domain}"
         )
 
+        provider_diagnostics: List[str] = []
+
         # ---------------------------------------------------------------------
         # PRIORITY 0: CACHE
         # ---------------------------------------------------------------------
         cached_res = self._get_from_cache(request)
         if cached_res:
+            logger.info(f"[ARM IMAGE MANAGER] Cache HIT for Slide {request.slide_number} ('{request.slide_heading}')")
+            self.last_diagnostics = ["Cache: HIT"]
             return cached_res
+
+        logger.info(f"[ARM IMAGE MANAGER] Cache MISS for Slide {request.slide_number} ('{request.slide_heading}'). Continuing provider chain...")
 
         # Prepare final save path
         target_path = request.output_path
@@ -371,6 +381,7 @@ class ImageGenerationManager:
                 source=provider_name,
             )
             logger.info(f"[ARM IMAGE MANAGER] Provider ({provider_name}) SUCCESS via {model_name}.")
+            self.last_diagnostics = [f"{provider_name}: SUCCESS ({model_name})"]
             return ImageGenerationResponse(
                 success=True,
                 source=provider_name,
@@ -387,7 +398,15 @@ class ImageGenerationManager:
         # ---------------------------------------------------------------------
         # PRIORITY 1: SUPERNOVA (xKiro sensenova/sensenova-u1.5-lite) - PRIMARY
         # ---------------------------------------------------------------------
-        if XKiroImageProvider.is_configured() and image_provider_health_manager.is_available("xkiro"):
+        if not XKiroImageProvider.is_configured():
+            provider_diagnostics.append("Supernova: not configured")
+            logger.info("[ARM IMAGE MANAGER] Supernova/xKiro is not configured. Continuing fallback...")
+        elif not image_provider_health_manager.is_available("xkiro"):
+            rec = image_provider_health_manager._get_record("xkiro")
+            cd_diag = f"Supernova: in cooldown ({rec.failure_reason or 'rate limited / quota exhausted'})"
+            provider_diagnostics.append(cd_diag)
+            logger.info(f"[ARM IMAGE MANAGER] {cd_diag}. Continuing fallback...")
+        else:
             logger.info("[ARM IMAGE MANAGER] Priority 1: Attempting Supernova (xKiro sensenova/sensenova-u1.5-lite)...")
             try:
                 xkiro_res = XKiroImageProvider.generate_image(prompt=request.final_image_prompt)
@@ -403,18 +422,32 @@ class ImageGenerationManager:
                     )
                     if res:
                         return res
+                    provider_diagnostics.append("Supernova: duplicate image rejected")
                 else:
-                    logger.info("[ARM IMAGE MANAGER] Priority 1 (Supernova/xKiro) failed or returned empty bytes. Continuing fallback...")
+                    rec = image_provider_health_manager._get_record("xkiro")
+                    fail_diag = f"Supernova: {rec.failure_reason or 'empty or invalid response'}"
+                    provider_diagnostics.append(fail_diag)
+                    logger.warning(f"[ARM IMAGE MANAGER] Priority 1 ({fail_diag}). Continuing fallback...")
             except Exception as e:
+                fail_diag = f"Supernova: exception ({e})"
+                provider_diagnostics.append(fail_diag)
                 logger.warning(f"[ARM IMAGE MANAGER] Priority 1 (Supernova/xKiro) exception: {e}")
 
         # ---------------------------------------------------------------------
         # PRIORITY 2: CLOUDFLARE WORKER / CLOUDFLARE AI (FALLBACK)
         # ---------------------------------------------------------------------
-        if CloudflareWorkerImageProvider.is_configured() and image_provider_health_manager.is_available("cloudflare"):
-            logger.info("[ARM IMAGE MANAGER] Priority 2: Attempting Cloudflare Worker...")
+        if not CloudflareImageProvider.is_configured():
+            provider_diagnostics.append("Cloudflare: not configured")
+            logger.info("[ARM IMAGE MANAGER] Cloudflare (Worker / Direct) is not configured. Continuing fallback...")
+        elif not image_provider_health_manager.is_available("cloudflare"):
+            rec = image_provider_health_manager._get_record("cloudflare")
+            cd_diag = f"Cloudflare: in cooldown ({rec.failure_reason or 'rate limited / daily quota exhausted'})"
+            provider_diagnostics.append(cd_diag)
+            logger.info(f"[ARM IMAGE MANAGER] {cd_diag}. Continuing fallback...")
+        else:
+            logger.info("[ARM IMAGE MANAGER] Priority 2: Attempting Cloudflare (Worker / Direct AI)...")
             try:
-                cf_res = CloudflareWorkerImageProvider.generate_image(prompt=request.final_image_prompt)
+                cf_res = CloudflareImageProvider.generate_image(prompt=request.final_image_prompt)
                 if cf_res and getattr(cf_res, "image_bytes", None) and isinstance(cf_res.image_bytes, (bytes, bytearray)):
                     res = _commit_provider_result(
                         provider_name="cloudflare",
@@ -427,34 +460,27 @@ class ImageGenerationManager:
                     )
                     if res:
                         return res
+                    provider_diagnostics.append("Cloudflare: duplicate image rejected")
                 else:
-                    logger.info("[ARM IMAGE MANAGER] Priority 2 (Cloudflare Worker) failed. Continuing fallback...")
+                    rec = image_provider_health_manager._get_record("cloudflare")
+                    fail_diag = f"Cloudflare: {rec.failure_reason or 'worker/direct returned empty response'}"
+                    provider_diagnostics.append(fail_diag)
+                    logger.warning(f"[ARM IMAGE MANAGER] Priority 2 ({fail_diag}). Continuing fallback...")
             except Exception as e:
-                logger.warning(f"[ARM IMAGE MANAGER] Priority 2 (Cloudflare Worker) exception: {e}")
-
-        # Secondary Cloudflare fallback if worker not configured
-        if CloudflareImageProvider.is_configured() and image_provider_health_manager.is_available("cloudflare"):
-            try:
-                cf_direct = CloudflareImageProvider.generate_image(prompt=request.final_image_prompt)
-                if cf_direct and getattr(cf_direct, "image_bytes", None) and isinstance(cf_direct.image_bytes, (bytes, bytearray)):
-                    res = _commit_provider_result(
-                        provider_name="cloudflare",
-                        model_name=cf_direct.model_name,
-                        img_bytes=cf_direct.image_bytes,
-                        width=cf_direct.dimensions[0],
-                        height=cf_direct.dimensions[1],
-                        sha256_val=cf_direct.sha256,
-                        metadata={"cf_provider": cf_direct.provider_name},
-                    )
-                    if res:
-                        return res
-            except Exception as e:
-                logger.warning(f"[ARM IMAGE MANAGER] Cloudflare Direct fallback exception: {e}")
+                fail_diag = f"Cloudflare: exception ({e})"
+                provider_diagnostics.append(fail_diag)
+                logger.warning(f"[ARM IMAGE MANAGER] Priority 2 (Cloudflare) exception: {e}")
 
         # ---------------------------------------------------------------------
         # PRIORITY 3: LOCAL RTX (ACTIVE ONLY IF ENABLED OR MOCKED IN TESTS)
         # ---------------------------------------------------------------------
-        if LocalRTXProvider.is_enabled() and image_provider_health_manager.is_available("local_rtx"):
+        if not LocalRTXProvider.is_enabled():
+            provider_diagnostics.append("Local RTX: disabled (headless/cloud environment)")
+            logger.info("[ARM IMAGE MANAGER] Local RTX is disabled. Continuing fallback...")
+        elif not image_provider_health_manager.is_available("local_rtx"):
+            provider_diagnostics.append("Local RTX: in cooldown")
+            logger.info("[ARM IMAGE MANAGER] Local RTX is in cooldown. Continuing fallback...")
+        else:
             logger.info("[ARM IMAGE MANAGER] Priority 3: Attempting Local RTX...")
             try:
                 rtx_res = LocalRTXProvider.generate_image(
@@ -474,13 +500,28 @@ class ImageGenerationManager:
                     )
                     if res:
                         return res
+                    provider_diagnostics.append("Local RTX: duplicate image rejected")
+                else:
+                    fail_diag = f"Local RTX: {getattr(rtx_res, 'error', 'failed')}"
+                    provider_diagnostics.append(fail_diag)
+                    logger.warning(f"[ARM IMAGE MANAGER] Priority 3 ({fail_diag}). Continuing fallback...")
             except Exception as e:
+                fail_diag = f"Local RTX: exception ({e})"
+                provider_diagnostics.append(fail_diag)
                 logger.warning(f"[ARM IMAGE MANAGER] Priority 3 (Local RTX) exception: {e}")
 
         # ---------------------------------------------------------------------
         # PRIORITY 4: HUGGING FACE (SERVERLESS INFERENCE PROVIDERS)
         # ---------------------------------------------------------------------
-        if HFImageProvider.is_configured() and image_provider_health_manager.is_available("huggingface"):
+        if not HFImageProvider.is_configured():
+            provider_diagnostics.append("Hugging Face: not configured")
+            logger.info("[ARM IMAGE MANAGER] Hugging Face is not configured. Continuing fallback...")
+        elif not image_provider_health_manager.is_available("huggingface"):
+            rec = image_provider_health_manager._get_record("huggingface")
+            cd_diag = f"Hugging Face: in cooldown ({rec.failure_reason or 'credits exhausted'})"
+            provider_diagnostics.append(cd_diag)
+            logger.info(f"[ARM IMAGE MANAGER] {cd_diag}. Continuing fallback...")
+        else:
             logger.info("[ARM IMAGE MANAGER] Priority 4: Attempting Hugging Face...")
             try:
                 hf_res = HFImageProvider.generate_image(prompt=request.final_image_prompt)
@@ -496,13 +537,29 @@ class ImageGenerationManager:
                     )
                     if res:
                         return res
+                    provider_diagnostics.append("Hugging Face: duplicate image rejected")
+                else:
+                    rec = image_provider_health_manager._get_record("huggingface")
+                    fail_diag = f"Hugging Face: {rec.failure_reason or 'inference returned empty image'}"
+                    provider_diagnostics.append(fail_diag)
+                    logger.warning(f"[ARM IMAGE MANAGER] Priority 4 ({fail_diag}). Continuing fallback...")
             except Exception as e:
+                fail_diag = f"Hugging Face: exception ({e})"
+                provider_diagnostics.append(fail_diag)
                 logger.warning(f"[ARM IMAGE MANAGER] Priority 4 (Hugging Face) exception: {e}")
 
         # ---------------------------------------------------------------------
         # PRIORITY 5: TOGETHER AI (FAST INFERENCE FALLBACK)
         # ---------------------------------------------------------------------
-        if TogetherImageProvider.is_configured() and image_provider_health_manager.is_available("together"):
+        if not TogetherImageProvider.is_configured():
+            provider_diagnostics.append("Together AI: not configured")
+            logger.info("[ARM IMAGE MANAGER] Together AI is not configured. Continuing fallback...")
+        elif not image_provider_health_manager.is_available("together"):
+            rec = image_provider_health_manager._get_record("together")
+            cd_diag = f"Together AI: in cooldown ({rec.failure_reason or 'rate limited / quota exhausted'})"
+            provider_diagnostics.append(cd_diag)
+            logger.info(f"[ARM IMAGE MANAGER] {cd_diag}. Continuing fallback...")
+        else:
             logger.info("[ARM IMAGE MANAGER] Priority 5: Attempting Together AI...")
             try:
                 tog_res = TogetherImageProvider.generate_image(
@@ -522,21 +579,32 @@ class ImageGenerationManager:
                     )
                     if res:
                         return res
+                    provider_diagnostics.append("Together AI: duplicate image rejected")
+                else:
+                    rec = image_provider_health_manager._get_record("together")
+                    fail_diag = f"Together AI: {rec.failure_reason or 'generation failed'}"
+                    provider_diagnostics.append(fail_diag)
+                    logger.warning(f"[ARM IMAGE MANAGER] Priority 5 ({fail_diag}). Continuing fallback...")
             except Exception as e:
+                fail_diag = f"Together AI: exception ({e})"
+                provider_diagnostics.append(fail_diag)
                 logger.warning(f"[ARM IMAGE MANAGER] Priority 5 (Together AI) exception: {e}")
 
         # ---------------------------------------------------------------------
         # PRIORITY 6: CONTROLLED FAILURE
         # ---------------------------------------------------------------------
+        diag_summary = "; ".join(provider_diagnostics) if provider_diagnostics else "All providers unavailable"
+        err_msg = f"All configured image providers failed or exhausted: {diag_summary}"
+        self.last_diagnostics = provider_diagnostics
         logger.error(
-            f"[ARM IMAGE MANAGER] All configured image providers failed or exhausted for Slide {request.slide_number} "
-            f"('{request.slide_heading}'). Returning IMAGE_GENERATION_UNAVAILABLE."
+            f"[ARM IMAGE MANAGER] Slide {request.slide_number} ('{request.slide_heading}'): {err_msg}"
         )
         return ImageGenerationResponse(
             success=False,
             source="none",
             status="IMAGE_GENERATION_UNAVAILABLE",
-            error="All configured image providers (Cache, Supernova, Cloudflare, Local RTX, Hugging Face, Together AI) were unavailable or exhausted.",
+            error=err_msg,
+            metadata={"diagnostics": provider_diagnostics},
         )
 
 

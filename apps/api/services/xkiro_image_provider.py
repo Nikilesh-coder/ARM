@@ -67,15 +67,16 @@ class XKiroImageProvider:
 
     @classmethod
     def get_api_key(cls) -> Optional[str]:
-        return os.getenv("XKIRO_API_KEY")
+        return os.getenv("XKIRO_API_KEY") or os.getenv("SUPERNOVA_API_KEY")
 
     @classmethod
     def get_base_url(cls) -> str:
-        return os.getenv("XKIRO_BASE_URL", DEFAULT_XKIRO_BASE_URL).strip().rstrip("/")
+        raw = os.getenv("XKIRO_BASE_URL") or os.getenv("SUPERNOVA_BASE_URL", DEFAULT_XKIRO_BASE_URL)
+        return raw.strip().rstrip("/")
 
     @classmethod
     def get_model_name(cls) -> str:
-        return os.getenv("XKIRO_MODEL", DEFAULT_XKIRO_MODEL).strip()
+        return (os.getenv("XKIRO_MODEL") or os.getenv("SUPERNOVA_MODEL", DEFAULT_XKIRO_MODEL)).strip()
 
     @classmethod
     def is_free_only(cls) -> bool:
@@ -275,14 +276,17 @@ class XKiroImageProvider:
                 img_resp = client.get(cdn_url)
             if img_resp.status_code != 200:
                 logger.error(f"[xKiro] Failed to download image from CDN (HTTP {img_resp.status_code})")
+                image_provider_health_manager.record_failure(cls.PROVIDER_NAME, reason=f"CDN download HTTP {img_resp.status_code}", status_code=img_resp.status_code)
                 return None
             raw_bytes = img_resp.content
         except Exception as ex:
             logger.error(f"[xKiro] Network error downloading image from CDN: {cls._sanitize(str(ex))}")
+            image_provider_health_manager.record_failure(cls.PROVIDER_NAME, reason=f"CDN network error: {cls._sanitize(str(ex))}")
             return None
 
         if len(raw_bytes) < 100:
             logger.error("[xKiro] Downloaded image payload too small to be valid.")
+            image_provider_health_manager.record_failure(cls.PROVIDER_NAME, reason="CDN payload too small")
             return None
 
         # Step 4: Validate image with PIL and convert cleanly to PNG
