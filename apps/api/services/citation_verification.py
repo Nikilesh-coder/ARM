@@ -7,7 +7,7 @@ verification execution, generation jobs tracking, and structured database persis
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 
 from fastapi import HTTPException, status
 from apps.api.core.database import db_manager
