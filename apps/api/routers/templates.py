@@ -455,7 +455,26 @@ def download_raw_template(
                 target_path = rel_tpl
                 break
 
-    # 3b. Fallback disk walk search across .storage if not found in memory/db
+    # 3b. Fallback: Download from cloud storage provider if not on local disk
+    if (not target_path or not os.path.exists(target_path)) and tpl:
+        s_path = tpl.get("storage_path")
+        if not s_path and tpl.get("original_file_path") and "users/" in tpl.get("original_file_path", ""):
+            orig = tpl.get("original_file_path", "")
+            s_path = orig[orig.index("users/"):]
+        if s_path:
+            try:
+                sp = get_storage_provider()
+                file_data = sp.download_file(settings.storage.bucket_templates, s_path)
+                if file_data:
+                    local_dest = os.path.abspath(os.path.join(".storage", settings.storage.bucket_templates, s_path))
+                    os.makedirs(os.path.dirname(local_dest), exist_ok=True)
+                    with open(local_dest, "wb") as f_out:
+                        f_out.write(file_data)
+                    target_path = local_dest
+            except Exception as dl_err:
+                logger.warning(f"[RAW-TEMPLATE-LOOKUP] Could not download from cloud storage: {dl_err}")
+
+    # 3c. Fallback disk walk search across .storage if not found in memory/db
     if not target_path or not os.path.exists(target_path):
         base_storage = os.path.abspath(".storage")
         if os.path.exists(base_storage):

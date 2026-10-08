@@ -85,7 +85,11 @@ export function CreateProjectModal({
       if (list && list.length > 0) {
         setTemplates(list);
         if (!selectedTemplateId) {
-          const storedTid = typeof window !== "undefined" ? localStorage.getItem("arm_selected_template_id") : null;
+          let storedTid = typeof window !== "undefined" ? localStorage.getItem("arm_selected_template_id") : null;
+          if (storedTid === "0484aecb-dbc1-4671-a388-0f820124ca0e") {
+            if (typeof window !== "undefined") localStorage.removeItem("arm_selected_template_id");
+            storedTid = null;
+          }
           if (storedTid && list.some((t) => t.id === storedTid)) {
             setSelectedTemplateId(storedTid);
           } else {

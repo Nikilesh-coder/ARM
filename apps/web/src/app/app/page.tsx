@@ -14,7 +14,7 @@ import {
   ProjectIntakeData,
 } from "@/components/arm/guided-project-wizard";
 import { CreateProjectModal } from "@/components/arm/create-project-modal";
-import { ProjectDTO } from "@/lib/api-client";
+import { apiClient, ProjectDTO } from "@/lib/api-client";
 import { ThemeToggle } from "@/components/arm/theme-toggle";
 import {
   Sparkles,
@@ -99,10 +99,18 @@ export default function ArmWorkspacePage() {
       const storedEmail = localStorage.getItem("arm_user_email");
       if (storedName) setUserName(storedName);
       if (storedEmail) setUserEmail(storedEmail);
+      if (localStorage.getItem("arm_selected_template_id") === "0484aecb-dbc1-4671-a388-0f820124ca0e") {
+        localStorage.removeItem("arm_selected_template_id");
+      }
       const storedProj = localStorage.getItem("arm_active_project");
       if (storedProj) {
         try {
-          setActiveProject(JSON.parse(storedProj));
+          const parsed = JSON.parse(storedProj);
+          if (parsed.template_id === "0484aecb-dbc1-4671-a388-0f820124ca0e") {
+            parsed.template_id = undefined;
+            localStorage.setItem("arm_active_project", JSON.stringify(parsed));
+          }
+          setActiveProject(parsed);
         } catch {}
       }
     }
@@ -247,6 +255,35 @@ export default function ArmWorkspacePage() {
 
       let templateDesign: any = null;
       try {
+        if (hasAttachments && attachments[0].file) {
+          const file = attachments[0].file;
+          if (file.name.toLowerCase().endsWith(".docx")) {
+            try {
+              const upRes = await apiClient.uploadCustomCollegeTemplate(file, {
+                name: file.name.replace(/\.[^/.]+$/, ""),
+              });
+              if (upRes?.template?.id) {
+                const upId = upRes.template.id;
+                if (typeof window !== "undefined") {
+                  localStorage.setItem("arm_selected_template_id", upId);
+                  const actProjStr = localStorage.getItem("arm_active_project");
+                  if (actProjStr) {
+                    try {
+                      const p = JSON.parse(actProjStr);
+                      p.template_id = upId;
+                      localStorage.setItem("arm_active_project", JSON.stringify(p));
+                    } catch {}
+                  }
+                }
+                if (activeProject?.id) {
+                  apiClient.updateProject(activeProject.id, { template_id: upId }).catch(() => {});
+                }
+              }
+            } catch (upErr) {
+              console.warn("Custom template upload error:", upErr);
+            }
+          }
+        }
         const formData = new FormData();
         if (hasAttachments && attachments[0].file) {
           formData.append("file", attachments[0].file);
@@ -293,9 +330,36 @@ export default function ArmWorkspacePage() {
     let projectTitle = activeProject?.title || (searchedTopic.length >= 3 ? cleanTopicToAcademicTitle(searchedTopic) : cleanTopicToAcademicTitle(rawInput));
     let researchQuery = text.trim();
 
-    // If an attachment is uploaded with the search topic, convert it to active template design first!
+    // If an attachment is uploaded with the search topic, register as custom template and convert to active template design!
     let activeDesign: any = null;
     if (hasAttachments && attachments[0].file) {
+      const file = attachments[0].file;
+      if (file.name.toLowerCase().endsWith(".docx")) {
+        try {
+          const upRes = await apiClient.uploadCustomCollegeTemplate(file, {
+            name: file.name.replace(/\.[^/.]+$/, ""),
+          });
+          if (upRes?.template?.id) {
+            const upId = upRes.template.id;
+            if (typeof window !== "undefined") {
+              localStorage.setItem("arm_selected_template_id", upId);
+              const actProjStr = localStorage.getItem("arm_active_project");
+              if (actProjStr) {
+                try {
+                  const p = JSON.parse(actProjStr);
+                  p.template_id = upId;
+                  localStorage.setItem("arm_active_project", JSON.stringify(p));
+                } catch {}
+              }
+            }
+            if (activeProject?.id) {
+              apiClient.updateProject(activeProject.id, { template_id: upId }).catch(() => {});
+            }
+          }
+        } catch (upErr) {
+          console.warn("Custom template upload error during search:", upErr);
+        }
+      }
       try {
         const formData = new FormData();
         formData.append("file", attachments[0].file);
@@ -345,9 +409,21 @@ export default function ArmWorkspacePage() {
     ];
 
     const effectiveTemplateId =
-      activeProject?.template_id ||
       (typeof window !== "undefined" ? localStorage.getItem("arm_selected_template_id") : undefined) ||
+      activeProject?.template_id ||
       undefined;
+
+    if (!effectiveTemplateId) {
+      const assistantMsg: WorkspaceMessage = {
+        id: Math.random().toString(36).substring(2, 9),
+        role: "assistant",
+        content: `⚠️ **No College Template Selected.**\n\nPlease select an active college template from [Templates & Guidelines](/app/templates) or attach your institution's .docx template before generating the report. ARM requires an active college template to guarantee 100% preservation of college formatting, logos, and headers without redesigning.`,
+        timestamp: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, assistantMsg]);
+      setIsProcessing(false);
+      return;
+    }
 
     const generatePromise = fetch(`${API_BASE_URL}/api/v1/reports/generate`, {
       method: "POST",

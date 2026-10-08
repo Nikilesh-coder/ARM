@@ -46,7 +46,20 @@ export default function TemplatesPage() {
     fetchTemplates();
     if (typeof window !== "undefined") {
       const stored = localStorage.getItem("arm_selected_template_id");
-      if (stored) setSelectedTemplateId(stored);
+      if (stored) {
+        setSelectedTemplateId(stored);
+      } else {
+        const actProjStr = localStorage.getItem("arm_active_project");
+        if (actProjStr) {
+          try {
+            const act = JSON.parse(actProjStr);
+            if (act.template_id) {
+              setSelectedTemplateId(act.template_id);
+              localStorage.setItem("arm_selected_template_id", act.template_id);
+            }
+          } catch {}
+        }
+      }
     }
   }, []);
 
@@ -252,10 +265,25 @@ export default function TemplatesPage() {
                       <div className="flex items-center gap-2">
                         {/* SELECT / USE TEMPLATE BUTTON */}
                         <button
-                          onClick={() => {
+                          onClick={async () => {
                             setSelectedTemplateId(tpl.id);
                             if (typeof window !== "undefined") {
                               localStorage.setItem("arm_selected_template_id", tpl.id);
+                              const actProjStr = localStorage.getItem("arm_active_project");
+                              if (actProjStr) {
+                                try {
+                                  const act = JSON.parse(actProjStr);
+                                  act.template_id = tpl.id;
+                                  localStorage.setItem("arm_active_project", JSON.stringify(act));
+                                } catch {}
+                              }
+                            }
+                            if (selectedProjectId) {
+                              try {
+                                await apiClient.updateProject(selectedProjectId, { template_id: tpl.id });
+                              } catch (e) {
+                                console.warn("Failed to update project template:", e);
+                              }
                             }
                           }}
                           className={cn(
@@ -368,7 +396,26 @@ export default function TemplatesPage() {
       <CustomCollegeTemplateModal
         isOpen={isCustomUploadOpen}
         onClose={() => setIsCustomUploadOpen(false)}
-        onTemplateSaved={(tpl) => {
+        onTemplateSaved={async (tpl) => {
+          setSelectedTemplateId(tpl.id);
+          if (typeof window !== "undefined") {
+            localStorage.setItem("arm_selected_template_id", tpl.id);
+            const actProjStr = localStorage.getItem("arm_active_project");
+            if (actProjStr) {
+              try {
+                const act = JSON.parse(actProjStr);
+                act.template_id = tpl.id;
+                localStorage.setItem("arm_active_project", JSON.stringify(act));
+              } catch {}
+            }
+          }
+          if (selectedProjectId) {
+            try {
+              await apiClient.updateProject(selectedProjectId, { template_id: tpl.id });
+            } catch (e) {
+              console.warn("Failed to update project template:", e);
+            }
+          }
           fetchTemplates();
         }}
       />
