@@ -650,6 +650,12 @@ export default function MyProjectsPage() {
         isOpen={isCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}
         onProjectCreated={(newProj) => {
+          if (typeof window !== "undefined") {
+            localStorage.setItem("arm_active_project", JSON.stringify(newProj));
+            if (newProj.template_id) {
+              localStorage.setItem("arm_selected_template_id", newProj.template_id);
+            }
+          }
           setProjects((prev) => [newProj, ...prev]);
         }}
       />

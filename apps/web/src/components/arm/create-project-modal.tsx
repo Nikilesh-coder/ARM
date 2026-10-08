@@ -200,8 +200,11 @@ export function CreateProjectModal({
         user_id: authUserId,
       });
 
-      if (typeof window !== "undefined" && selectedTemplateId) {
-        localStorage.setItem("arm_selected_template_id", selectedTemplateId);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("arm_active_project", JSON.stringify(newProject));
+        if (selectedTemplateId) {
+          localStorage.setItem("arm_selected_template_id", selectedTemplateId);
+        }
       }
 
       setSuccessMsg(`Project "${cleanTitle}" initialized successfully!`);
