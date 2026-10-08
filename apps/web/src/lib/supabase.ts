@@ -1,18 +1,41 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { Database } from "../types/database.types";
 
+const DEFAULT_SUPABASE_URL = "https://braijzgcqyimvpoifwjg.supabase.co";
+const DEFAULT_SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJyYWlqemdjcXlpbXZwb2lmd2pnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA2MDUwMDMsImV4cCI6MjEwNjE4MTAwM30.Dy10C-173RfrJ2RkGtMkqUZgEABmkkgtunwMQ4LSVpQ";
+
 function normalizeUrl(url?: string): string {
-  if (!url) return "";
+  if (!url) return DEFAULT_SUPABASE_URL;
   let cleaned = url.trim().replace(/^["']+|["']+$/g, "").trim();
-  if (cleaned && !cleaned.startsWith("http://") && !cleaned.startsWith("https://")) {
+  if (
+    !cleaned ||
+    cleaned.includes("YOUR_EXISTING_SUPABASE_URL") ||
+    cleaned.includes("your-project.supabase.co") ||
+    cleaned.toLowerCase() === "placeholder" ||
+    cleaned.toLowerCase() === "undefined"
+  ) {
+    return DEFAULT_SUPABASE_URL;
+  }
+  if (!cleaned.startsWith("http://") && !cleaned.startsWith("https://")) {
     cleaned = `https://${cleaned}`;
   }
   return cleaned;
 }
 
 function normalizeKey(key?: string): string {
-  if (!key) return "";
-  return key.trim().replace(/^["']+|["']+$/g, "").trim();
+  if (!key) return DEFAULT_SUPABASE_ANON_KEY;
+  let cleaned = key.trim().replace(/^["']+|["']+$/g, "").trim();
+  if (
+    !cleaned ||
+    cleaned.includes("YOUR_EXISTING_SUPABASE_ANON_KEY") ||
+    cleaned.includes("your-anon-public-key") ||
+    cleaned.toLowerCase() === "placeholder" ||
+    cleaned.toLowerCase() === "undefined"
+  ) {
+    return DEFAULT_SUPABASE_ANON_KEY;
+  }
+  return cleaned;
 }
 
 let clientInstance: SupabaseClient<Database> | null = null;
@@ -24,12 +47,6 @@ export function getSupabase(): SupabaseClient<Database> {
 
   const supabaseUrl = normalizeUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
   const supabaseAnonKey = normalizeKey(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    throw new Error(
-      "Supabase credentials missing: NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY must be provided."
-    );
-  }
 
   clientInstance = createClient<Database>(supabaseUrl, supabaseAnonKey, {
     auth: {
