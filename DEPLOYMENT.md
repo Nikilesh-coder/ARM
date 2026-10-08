@@ -30,7 +30,7 @@ GitHub Repository
    - **Name**: `arm-backend`
    - **Region**: Choose closest to your users / Supabase region (e.g., Frankfurt / Singapore / Oregon)
    - **Branch**: `main`
-   - **Root Directory**: `.` (leave empty or set to repository root)
+   - **Root Directory**: *(Leave completely blank — do NOT type "empty")*
    - **Runtime**: `Python 3`
    - **Build Command**:
      ```bash
