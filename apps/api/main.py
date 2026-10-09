@@ -38,6 +38,7 @@ from apps.api.routers import (  # noqa: E402
     replacement_router,
     integrations_router,
     image_generation_router,
+    auth_router,
 )
 
 
@@ -103,6 +104,7 @@ app.include_router(assets_router, prefix=settings.api_v1_str)
 app.include_router(replacement_router, prefix=settings.api_v1_str)
 app.include_router(integrations_router, prefix=settings.api_v1_str)
 app.include_router(image_generation_router, prefix=settings.api_v1_str)
+app.include_router(auth_router, prefix=settings.api_v1_str)
 
 
 

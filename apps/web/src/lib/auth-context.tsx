@@ -108,7 +108,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } = supabase.auth.onAuthStateChange(async (event, newSession) => {
       if (!mounted) return;
 
-      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
+      if (
+        event === "SIGNED_IN" ||
+        event === "TOKEN_REFRESHED" ||
+        event === "USER_UPDATED" ||
+        event === "PASSWORD_RECOVERY" ||
+        event === "INITIAL_SESSION"
+      ) {
         syncUserState(newSession);
         setIsLoading(false);
       } else if (event === "SIGNED_OUT") {

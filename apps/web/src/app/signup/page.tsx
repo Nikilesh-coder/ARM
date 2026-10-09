@@ -8,7 +8,7 @@ import { PublicFooter } from "@/components/layout/public-footer";
 import { PersonalizedWelcome } from "@/components/arm/personalized-welcome";
 import { Button } from "@/components/ui/button";
 import { StatusBanner } from "@/components/ui/status-banner";
-import { Lock, Mail, User, ArrowRight } from "lucide-react";
+import { Lock, Mail, User, ArrowRight, CheckCircle2, RefreshCw, AlertCircle } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth-context";
 
@@ -24,14 +24,35 @@ export default function SignupPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [showPersonalizedWelcome, setShowPersonalizedWelcome] = useState(false);
 
+  // Email confirmation state
+  const [isPendingConfirmation, setIsPendingConfirmation] = useState(false);
+  const [submittedEmail, setSubmittedEmail] = useState("");
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendMessage, setResendMessage] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
+
+  // In-flight submission lock to prevent multi-click races
+  const isSubmittingRef = React.useRef(false);
+
   useEffect(() => {
-    if (!isAuthLoading && isAuthenticated && !showPersonalizedWelcome) {
+    if (!isAuthLoading && isAuthenticated && !showPersonalizedWelcome && !isPendingConfirmation) {
       router.replace("/app");
     }
-  }, [isAuthLoading, isAuthenticated, showPersonalizedWelcome, router]);
+  }, [isAuthLoading, isAuthenticated, showPersonalizedWelcome, isPendingConfirmation, router]);
+
+  // Cooldown countdown timer
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setResendCooldown((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [resendCooldown]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingRef.current || isLoading) return;
+
     setValidationError(null);
     setAuthError(null);
 
@@ -56,12 +77,31 @@ export default function SignupPage() {
       return;
     }
 
+    const cleanEmail = email.trim().toLowerCase();
+
+    // Prevent rapid duplicate submissions for the same email within 30 seconds
+    if (typeof window !== "undefined") {
+      const lastAttempt = sessionStorage.getItem(`arm_signup_attempt_${cleanEmail}`);
+      if (lastAttempt) {
+        const elapsed = (Date.now() - parseInt(lastAttempt, 10)) / 1000;
+        if (elapsed < 30) {
+          setValidationError(`A signup request for ${cleanEmail} was submitted just moments ago. Please check your inbox or wait ${Math.ceil(30 - elapsed)}s.`);
+          return;
+        }
+      }
+    }
+
+    isSubmittingRef.current = true;
     setIsLoading(true);
 
     try {
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem(`arm_signup_attempt_${cleanEmail}`, Date.now().toString());
+      }
+
       // Connect to Supabase Auth
       const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
+        email: cleanEmail,
         password: password,
         options: {
           data: {
@@ -77,22 +117,159 @@ export default function SignupPage() {
       // Persist profile name for workspace greeting and sidebar
       if (typeof window !== "undefined") {
         localStorage.setItem("arm_user_name", fullName.trim());
-        localStorage.setItem("arm_user_email", email.trim());
+        localStorage.setItem("arm_user_email", cleanEmail);
         if (data?.user?.id) {
           localStorage.setItem("arm_user_id", data.user.id);
         }
       }
 
-      // Trigger Personalized Typewriter Welcome before entering dashboard
-      setShowPersonalizedWelcome(true);
+      // Check whether email confirmation is required (session is null when unconfirmed)
+      if (data?.session) {
+        // Direct session granted (auto-confirm enabled or dev)
+        setShowPersonalizedWelcome(true);
+      } else {
+        // Email verification required
+        setSubmittedEmail(cleanEmail);
+        setIsPendingConfirmation(true);
+        setResendCooldown(60); // Start 60-second cooldown
+      }
     } catch (err: any) {
-      setAuthError(err?.message || "Failed to create account. Please try again.");
+      const msg = err?.message || "";
+      if (msg.toLowerCase().includes("rate limit") || err?.code === "over_email_send_rate_limit" || err?.status === 429) {
+        setAuthError(
+          "Email rate limit exceeded by Supabase. A verification email may already be on its way. Please check your inbox and spam folder, or wait a few minutes before trying again."
+        );
+      } else if (msg.toLowerCase().includes("already registered") || msg.toLowerCase().includes("user already exists")) {
+        setAuthError("An account with this email address already exists. Please sign in or use forgot password.");
+      } else if (msg.toLowerCase().includes("only request this after")) {
+        setAuthError(msg);
+      } else {
+        setAuthError(msg || "Failed to create account. Please try again.");
+      }
+    } finally {
       setIsLoading(false);
+      isSubmittingRef.current = false;
+    }
+  };
+
+  const handleResendConfirmation = async () => {
+    if (resendCooldown > 0 || resendLoading || !submittedEmail) return;
+
+    setResendLoading(true);
+    setResendMessage(null);
+
+    try {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email: submittedEmail,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      setResendCooldown(60);
+      setResendMessage({
+        type: "success",
+        text: `Verification email resent to ${submittedEmail}. Please check your inbox.`,
+      });
+    } catch (err: any) {
+      const msg = err?.message || "";
+      if (msg.toLowerCase().includes("rate limit") || err?.code === "over_email_send_rate_limit" || err?.status === 429) {
+        setResendMessage({
+          type: "error",
+          text: "Email rate limit exceeded. Please wait a few minutes before requesting another email, or check your spam folder.",
+        });
+        setResendCooldown(120);
+      } else {
+        setResendMessage({
+          type: "error",
+          text: msg || "Unable to resend email right now. Please wait a moment and try again.",
+        });
+      }
+    } finally {
+      setResendLoading(false);
     }
   };
 
   if (showPersonalizedWelcome) {
     return <PersonalizedWelcome userName={fullName} destinationUrl="/app" />;
+  }
+
+  // View: Pending Email Confirmation
+  if (isPendingConfirmation) {
+    return (
+      <div className="min-h-screen bg-white dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between transition-colors duration-300">
+        <PublicNav />
+        <main className="flex-1 flex items-center justify-center p-6">
+          <div className="w-full max-w-md">
+            <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-8 sm:p-10 shadow-xl dark:shadow-2xl space-y-6 text-center">
+              <div className="w-14 h-14 rounded-2xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/60 flex items-center justify-center text-blue-600 dark:text-blue-400 mx-auto shadow-sm">
+                <Mail className="w-7 h-7" />
+              </div>
+
+              <div className="space-y-2">
+                <h1 className="text-2xl font-semibold text-zinc-900 dark:text-white tracking-tight">
+                  Verify Your Academic Email
+                </h1>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                  We sent an account activation link to:
+                </p>
+                <div className="inline-block px-3 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-mono font-medium text-zinc-900 dark:text-zinc-200 break-all">
+                  {submittedEmail}
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800/80 text-left space-y-2 text-xs text-zinc-600 dark:text-zinc-400">
+                <p className="flex items-start gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                  <span>Click the link in the email to activate your account.</span>
+                </p>
+                <p className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                  <span>If you don&apos;t see the email, check your spam/junk folder.</span>
+                </p>
+              </div>
+
+              {resendMessage && (
+                <StatusBanner
+                  type={resendMessage.type === "success" ? "success" : "error"}
+                  title={resendMessage.type === "success" ? "Email Resent" : "Rate Limit Notice"}
+                  message={resendMessage.text}
+                />
+              )}
+
+              <div className="space-y-3 pt-2">
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="lg"
+                  className="w-full text-xs font-semibold"
+                  onClick={() => router.push("/login")}
+                >
+                  Proceed to Sign In <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
+                </Button>
+
+                <button
+                  type="button"
+                  disabled={resendCooldown > 0 || resendLoading}
+                  onClick={handleResendConfirmation}
+                  className="w-full text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 py-2 transition-colors"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${resendLoading ? "animate-spin" : ""}`} />
+                  {resendCooldown > 0
+                    ? `Resend available in ${resendCooldown}s`
+                    : resendLoading
+                    ? "Sending..."
+                    : "Resend verification email"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </main>
+        <PublicFooter />
+      </div>
+    );
   }
 
   if (isAuthLoading) {

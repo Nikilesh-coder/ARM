@@ -11,6 +11,7 @@ from .assets import router as assets_router
 from .replacement import router as replacement_router
 from .integrations import router as integrations_router
 from .image_generation import router as image_generation_router
+from .auth import router as auth_router
 
 __all__ = [
     "health_router",
@@ -22,6 +23,7 @@ __all__ = [
     "replacement_router",
     "integrations_router",
     "image_generation_router",
+    "auth_router",
 ]
 
 
