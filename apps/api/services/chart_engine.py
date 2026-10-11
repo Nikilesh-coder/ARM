@@ -76,39 +76,84 @@ class ChartEngine:
             if len(data) >= 2:
                 return {"type": "bar", "series": data}
 
-        # 2. Extract percentage / benchmark pairs from text
+        def _clean_label(raw: str) -> str:
+            tokens = [t for t in re.split(r"\s+", raw.strip()) if t]
+            stop_words = {
+                "the", "a", "an", "with", "and", "achieved", "in", "on", "at", "our",
+                "their", "is", "was", "for", "by", "model", "system", "yielded", "reported",
+                "demonstrated", "showed", "measured", "patient"
+            }
+            filtered = [t for t in tokens if t.lower() not in stop_words]
+            clean_tokens = filtered[-2:] if filtered else tokens[-1:]
+            return " ".join(clean_tokens).title()
+
+        # 2. Baseline to Proposed patterns: e.g. "reduced water loss from 14.2% to 1.1%", "latency dropped from 85ms to 12ms"
+        range_matches = re.findall(
+            r"(?:reduced|increased|dropped|improved|grew|decreased)\s+([A-Za-z\s]{3,28})\s+from\s+([\d\.]+)(%|ms|s|min|l)?\s+to\s+([\d\.]+)(%|ms|s|min|l)?",
+            slide_matter,
+            re.IGNORECASE,
+        )
+        for label, start_num, start_u, end_num, end_u in range_matches:
+            lbl_clean = _clean_label(label)
+            u = end_u or start_u or ""
+            try:
+                data[f"Baseline {lbl_clean}" + (f" ({u})" if u else "")] = float(start_num)
+                data[f"Proposed {lbl_clean}" + (f" ({u})" if u else "")] = float(end_num)
+            except ValueError:
+                pass
+
+        # 3. Extract key:value benchmark pairs from text
         # Patterns like: "Accuracy: 98.4%", "Latency: 14ms", "Water saved: 41%", "Error Rate: 2.1%"
         matches = re.findall(
-            r"([A-Za-z\s]{3,25})[:=–-]\s*([\d\.]+)\s*(%|ms|s|l|liters|db|fps)?",
+            r"(?:^|[\s,;])([A-Za-z]+(?:\s+[A-Za-z]+)?)\s*[:=–-]\s*([\d\.]+)\s*(%|ms|s|l|liters|min|minutes|fps|sec)?",
             slide_matter,
             re.IGNORECASE,
         )
         for label, num_str, unit in matches:
-            lbl_clean = label.strip().title()
-            # Ignore generic words
-            if lbl_clean.lower() in ("slide", "page", "figure", "table", "step", "version", "chapter"):
+            lbl_clean = _clean_label(label)
+            if any(w in lbl_clean.lower() for w in ("slide", "page", "figure", "table", "step", "version", "chapter")):
                 continue
             try:
                 val = float(num_str)
-                data[f"{lbl_clean} ({unit})" if unit else lbl_clean] = val
+                key_name = f"{lbl_clean} ({unit})" if unit else lbl_clean
+                if key_name not in data:
+                    data[key_name] = val
             except ValueError:
                 pass
 
-        if len(data) >= 2:
-            return {"type": "bar", "series": data}
-
-        # Percentage detection: "reduced by 40%", "increased to 85%"
-        pct_matches = re.findall(r"([\w\s]{4,20})\s+(?:by|to|of)\s+([\d\.]+)%", slide_matter)
-        for label, num_str in pct_matches:
+        # 4. Phrasing like: "wait time is 185 minutes", "consumption of 4500 liters", "queue delay at 26.8 seconds"
+        verb_matches = re.findall(
+            r"([A-Za-z\s]{3,28})\s+(?:is|was|at|of)\s+([\d\.]+)\s*(%|ms|s|sec|seconds|min|minutes|l|liters|fps|sec)?\b",
+            slide_matter,
+            re.IGNORECASE,
+        )
+        for label, num_str, unit in verb_matches:
+            lbl_clean = _clean_label(label)
+            if any(w in lbl_clean.lower() for w in ("slide", "page", "figure", "table", "step", "version", "chapter", "versus", "there")):
+                continue
             try:
-                data[label.strip().title()] = float(num_str)
+                val = float(num_str)
+                key_name = f"{lbl_clean} ({unit})" if unit else lbl_clean
+                if key_name not in data and len(key_name) <= 35:
+                    data[key_name] = val
             except ValueError:
                 pass
+
+        # 5. Percentage detection: "reduced by 40%", "increased to 85%"
+        pct_matches = re.findall(r"([\w\s]{4,25})\s+(?:by|to|of)\s+([\d\.]+)%", slide_matter)
+        for label, num_str in pct_matches:
+            lbl_clean = _clean_label(label)
+            if not any(w in lbl_clean.lower() for w in ("from", "reduced", "increased")):
+                try:
+                    key_name = f"{lbl_clean} (%)"
+                    if key_name not in data:
+                        data[key_name] = float(num_str)
+                except ValueError:
+                    pass
 
         if len(data) >= 2:
             return {"type": "bar", "series": data}
 
-        # No valid numeric data detected
         return None
 
     def generate_chart(

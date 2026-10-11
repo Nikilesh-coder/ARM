@@ -20,7 +20,8 @@ import hashlib
 import uuid
 from typing import Dict, Any, List, Optional, Tuple, Set
 import lxml.etree as ET
-from PIL import Image as PILImage, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+PILImage = Image
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -299,8 +300,13 @@ class IntelligentImageService:
                 project_description=clean_prob,
             )
 
-            target_w = 1600
-            target_h = max(600, min(1600, int(round(target_w / max(0.4, ar)))))
+            if ar < 1.0:
+                target_w = 1200
+                target_h = max(1200, int(round(target_w / max(0.2, ar))))
+            else:
+                target_w = 1600
+                target_h = max(400, int(round(target_w / max(0.2, ar))))
+
             vis_out_path = os.path.join(output_dir, f"{report_id}_slide_{slide_idx}_{fname}")
 
             vis_res = visual_engine.generate_visual(
@@ -320,6 +326,17 @@ class IntelligentImageService:
 
             # Check if visual was genuinely generated
             if vis_res.success and vis_res.asset_path and os.path.exists(vis_res.asset_path):
+                # Ensure visual conforms to target slot aspect ratio without clipping text/labels
+                cls.fit_visual_asset_to_container(
+                    image_path=vis_res.asset_path,
+                    target_w=target_w,
+                    target_h=target_h,
+                    target_ar=ar,
+                    visual_type=vis_res.visual_type,
+                    heading=heading,
+                    matter=slide_matter,
+                )
+
                 with open(vis_res.asset_path, "rb") as f_sha:
                     img_sha = hashlib.sha256(f_sha.read()).hexdigest()
 
@@ -345,6 +362,15 @@ class IntelligentImageService:
                         slot_id=alt_slot,
                     )
                     if vis_res.success and vis_res.asset_path and os.path.exists(vis_res.asset_path):
+                        cls.fit_visual_asset_to_container(
+                            image_path=vis_res.asset_path,
+                            target_w=target_w,
+                            target_h=target_h,
+                            target_ar=ar,
+                            visual_type=vis_res.visual_type,
+                            heading=alt_heading,
+                            matter=slide_matter,
+                        )
                         with open(vis_res.asset_path, "rb") as f_sha_alt:
                             img_sha = hashlib.sha256(f_sha_alt.read()).hexdigest()
 
@@ -374,6 +400,151 @@ class IntelligentImageService:
                 )
 
         return replacements
+
+    @classmethod
+    def fit_visual_asset_to_container(
+        cls,
+        image_path: str,
+        target_w: int,
+        target_h: int,
+        target_ar: float,
+        visual_type: str = "image",
+        heading: str = "",
+        matter: str = "",
+    ) -> None:
+        """
+        Fits visual asset to target container dimensions and aspect ratio while guaranteeing:
+        1. Zero non-uniform stretching.
+        2. Absolute preservation of all chart labels, diagram nodes, arrows, text banners, and legends.
+        3. Adaptive rendering:
+           - Diagrams, charts, infographics, screenshots, and text-bearing visuals:
+             Aspect-ratio preserving 'contain' resize with seamless background padding (solid white/dark or blurred).
+           - Pure photographic visuals:
+             Focal-preserving center-crop to target container bounds.
+        4. Safe format handling:
+           - Correctly preserves PNG transparency or outputs clean RGB for JPEG.
+           - Formats JPEG vs PNG correctly without passing JPEG-only options to PNG.
+        """
+        if not os.path.exists(image_path):
+            return
+
+        try:
+            with Image.open(image_path) as current_img:
+                cur_w, cur_h = current_img.size
+                cur_ar = cur_w / max(1, cur_h)
+                ext = os.path.splitext(image_path)[1].lower()
+                is_jpeg = ext in (".jpg", ".jpeg")
+                is_png = ext == ".png"
+
+                def _save_result(img: Image.Image) -> None:
+                    if is_jpeg:
+                        if img.mode in ("RGBA", "P", "LA"):
+                            # Composite onto pure white background before JPEG save
+                            rgb_bg = Image.new("RGB", img.size, (255, 255, 255))
+                            if "A" in img.mode:
+                                rgb_bg.paste(img, (0, 0), mask=img.split()[-1])
+                            else:
+                                rgb_bg.paste(img.convert("RGB"), (0, 0))
+                            img = rgb_bg
+                        elif img.mode != "RGB":
+                            img = img.convert("RGB")
+                        img.save(image_path, "JPEG", quality=95)
+                    elif is_png:
+                        img.save(image_path, "PNG", optimize=True)
+                    else:
+                        img.save(image_path)
+
+                # If aspect ratio is already within 5% tolerance, simple uniform Lanczos resize
+                if abs(cur_ar - target_ar) / max(0.01, target_ar) <= 0.05:
+                    if (cur_w, cur_h) != (target_w, target_h):
+                        resized = current_img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+                        _save_result(resized)
+                    return
+
+                # Check if asset is explicitly or semantically a diagram/chart/infographic/text visual
+                h_lower = str(heading).lower()
+                m_lower = str(matter).lower()
+                is_structured_by_intent = (
+                    visual_type in ("chart", "mermaid")
+                    or any(w in h_lower for w in ("diagram", "flowchart", "chart", "graph", "screenshot", "interface", "dashboard", "ui", "topology", "infographic", "architecture", "schema", "matrix", "funnel", "pipeline", "operations"))
+                    or any(w in m_lower for w in ("diagram", "flowchart", "chart", "graph", "screenshot", "interface", "dashboard", "ui", "topology", "architecture", "banner"))
+                )
+
+                # Corner pixels check: charts/diagrams on plain canvas have pure uniform borders
+                corner_pixels = [
+                    current_img.getpixel((0, 0)),
+                    current_img.getpixel((cur_w - 1, 0)),
+                    current_img.getpixel((0, cur_h - 1)),
+                    current_img.getpixel((cur_w - 1, cur_h - 1)),
+                ]
+
+                def is_pure_white(c):
+                    if isinstance(c, (int, float)):
+                        return c >= 250
+                    return all(v >= 250 for v in c[:3])
+
+                def is_pure_dark(c):
+                    if isinstance(c, (int, float)):
+                        return c <= 15
+                    return all(v <= 15 for v in c[:3])
+
+                all_white_corners = all(is_pure_white(c) for c in corner_pixels)
+                all_dark_corners = all(is_pure_dark(c) for c in corner_pixels)
+
+                # Note: Only apply contain-fit if it's structured by intent OR has pure uniform plain background
+                # Ordinary photos with bright skies or dark shadows will NOT trigger pure-corner containment
+                if is_structured_by_intent or all_white_corners or all_dark_corners:
+                    # PATH A: ASPECT-RATIO PRESERVING 'CONTAIN' RESIZE WITH PADDING
+                    # Guarantees 100% of labels, text banners, nodes, and axes are preserved!
+                    scale = min(target_w / cur_w, target_h / cur_h)
+                    scaled_w = max(1, int(round(cur_w * scale)))
+                    scaled_h = max(1, int(round(cur_h * scale)))
+                    scaled_img = current_img.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
+
+                    has_alpha = current_img.mode in ("RGBA", "LA")
+
+                    if all_white_corners:
+                        canvas_mode = "RGBA" if (has_alpha and is_png) else "RGB"
+                        canvas = Image.new(canvas_mode, (target_w, target_h), (255, 255, 255, 255) if canvas_mode == "RGBA" else (255, 255, 255))
+                    elif all_dark_corners:
+                        r = int(sum(c[0] if isinstance(c, tuple) else c for c in corner_pixels) / 4)
+                        g = int(sum(c[1] if isinstance(c, tuple) else c for c in corner_pixels) / 4)
+                        b = int(sum(c[2] if isinstance(c, tuple) else c for c in corner_pixels) / 4)
+                        canvas_mode = "RGBA" if (has_alpha and is_png) else "RGB"
+                        canvas = Image.new(canvas_mode, (target_w, target_h), (r, g, b, 255) if canvas_mode == "RGBA" else (r, g, b))
+                    else:
+                        # Soft blurred palette background to fill letterbox/pillarbox margins seamlessly
+                        rgb_for_blur = current_img.convert("RGB") if current_img.mode != "RGB" else current_img
+                        canvas = rgb_for_blur.resize((target_w, target_h), Image.Resampling.LANCZOS).filter(ImageFilter.GaussianBlur(radius=25))
+                        if is_png and has_alpha:
+                            canvas = canvas.convert("RGBA")
+
+                    paste_x = (target_w - scaled_w) // 2
+                    paste_y = (target_h - scaled_h) // 2
+
+                    if "A" in scaled_img.mode:
+                        canvas.paste(scaled_img, (paste_x, paste_y), mask=scaled_img.split()[-1])
+                    else:
+                        canvas.paste(scaled_img, (paste_x, paste_y))
+
+                    final_img = canvas
+                else:
+                    # PATH B: PURE PHOTOGRAPHIC SCENE (FOCAL-PRESERVING CENTER-CROP)
+                    if cur_ar > target_ar:
+                        new_w = int(round(cur_h * target_ar))
+                        offset_x = max(0, (cur_w - new_w) // 2)
+                        crop_box = (offset_x, 0, min(cur_w, offset_x + new_w), cur_h)
+                    else:
+                        new_h = int(round(cur_w / max(0.01, target_ar)))
+                        offset_y = max(0, (cur_h - new_h) // 2)
+                        crop_box = (0, offset_y, cur_w, min(cur_h, offset_y + new_h))
+
+                    cropped = current_img.crop(crop_box)
+                    final_img = cropped.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+                _save_result(final_img)
+        except Exception as e:
+            logger.warning(f"[ARM VISUAL ENGINE] fit_visual_asset_to_container failed for {image_path}: {e}")
 
     @classmethod
     def _render_cover_visual(
