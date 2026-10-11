@@ -368,13 +368,36 @@ class ReplacementValidator:
                         })
 
                 # 5. Media Integrity Check (Logos and Unmodified Media)
-                orig_media_files = [n for n in orig_names if n.startswith("word/media/")]
-                for m_file in orig_media_files:
+                # Filter out zip directory entries (is_dir() or ending in /) and entries with empty basename.
+                # Validates actual files under word/media/ only.
+                orig_media_infos = [
+                    info for info in z_orig.infolist()
+                    if info.filename.startswith("word/media/")
+                    and not info.is_dir()
+                    and not info.filename.endswith("/")
+                    and os.path.basename(info.filename).strip() != ""
+                ]
+
+                # Normalize allowed_replaced_media to a set of cleaned basenames and relative paths
+                norm_allowed_media: Set[str] = set()
+                for item in allowed_replaced_media:
+                    if not item:
+                        continue
+                    item_str = str(item).strip().replace("\\", "/").lower()
+                    norm_allowed_media.add(item_str)
+                    norm_allowed_media.add(item_str.lstrip("/"))
+                    norm_allowed_media.add(os.path.basename(item_str))
+
+                for m_info in orig_media_infos:
+                    m_file = m_info.filename
                     m_basename = os.path.basename(m_file)
+                    m_norm = m_file.replace("\\", "/").lower()
+
                     # Check if this media file was explicitly allowed to be replaced
                     is_allowed_replace = (
-                        m_file in allowed_replaced_media or
-                        m_basename in allowed_replaced_media
+                        m_norm in norm_allowed_media or
+                        m_norm.lstrip("/") in norm_allowed_media or
+                        m_basename.lower() in norm_allowed_media
                     )
                     if not is_allowed_replace:
                         if m_file not in gen_names:

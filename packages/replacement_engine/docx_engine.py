@@ -236,6 +236,9 @@ class DocxTemplateReplacementEngine(BaseReplacementEngine):
                             if arm_k in replaced_fields:
                                 break
 
+        # Track actual physical media files/basenames replaced
+        replaced_media_targets: Set[str] = set()
+
         # Step 2d: Image placeholders & mapped images replacement
         if image_mapping is not None:
             # Custom image mapping mode: only replace images where action == "replace"
@@ -243,6 +246,7 @@ class DocxTemplateReplacementEngine(BaseReplacementEngine):
                 action = im.get("action", "fixed").lower()
                 arm_img_f = im.get("arm_image_field", "image_1")
                 rel_id = im.get("rel_id")
+                fname = im.get("filename")
                 if action == "replace":
                     img_src = image_assets.get(arm_img_f) or field_values.get(arm_img_f)
                     if isinstance(img_src, dict):
@@ -258,6 +262,12 @@ class DocxTemplateReplacementEngine(BaseReplacementEngine):
                                         rel.target_part._blob = f_img.read()
                                     images_replaced_count += 1
                                     replaced_fields.add(arm_img_f)
+                                    if hasattr(rel.target_part, "partname"):
+                                        p_name = str(rel.target_part.partname)
+                                        replaced_media_targets.add(p_name)
+                                        replaced_media_targets.add(os.path.basename(p_name))
+                                    if fname:
+                                        replaced_media_targets.add(fname)
                                 except Exception as img_ex:
                                     warnings.append(f"Failed to update embedded image blob for {rel_id}: {img_ex}")
                         else:
@@ -266,6 +276,8 @@ class DocxTemplateReplacementEngine(BaseReplacementEngine):
                             if inserted:
                                 images_replaced_count += 1
                                 replaced_fields.add(arm_img_f)
+                                if fname:
+                                    replaced_media_targets.add(fname)
                     else:
                         warnings.append(f"Image asset for '{arm_img_f}' not found on disk: '{img_src}'")
         else:
@@ -416,7 +428,7 @@ class DocxTemplateReplacementEngine(BaseReplacementEngine):
                 original_docx_path=template_path,
                 generated_docx_path=output_path,
                 allowed_replaced_fields=replaced_fields,
-                allowed_replaced_media=set(image_assets.keys()),
+                allowed_replaced_media=replaced_media_targets,
             )
             if not pkg_val.get("is_valid", True):
                 for p_err in pkg_val.get("errors", []):

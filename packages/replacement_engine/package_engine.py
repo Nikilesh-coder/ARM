@@ -61,9 +61,10 @@ CREDENTIAL_KEYWORDS = (
     "GUIDED BY", "COMMUNITY SERVICE PROJECT", "DEPARTMENT OF", "COLLEGE",
     "ENGINEERING", "UNIVERSITY", "STUDENT", "ROLL NO", "HALL TICKET", "REG NO",
     "BATCH", "ACADEMIC YEAR", "SEMINAR REPORT", "PROJECT REPORT", "A REPORT ON",
+    "MINI PROJECT", "MAJOR PROJECT", "CAPSTONE PROJECT", "A MINI PROJECT", "A MAJOR PROJECT",
     "GOVERNMENT OF", "AUTONOMOUS", "PH.D.", "M.TECH", "B.TECH",
     "ASSOCIATE PROFESSOR", "ASSISTANT PROFESSOR", "HEAD OF THE DEPARTMENT", "DR.",
-    "QUERIES", "THANK YOU", "CONTENTS", "AGENDA"
+    "QUERIES", "THANK YOU", "CONTENTS", "AGENDA", "TABLE OF CONTENTS", "LIST OF ABBREVIATIONS"
 )
 
 
@@ -175,7 +176,8 @@ class PackageLevelDocxEngine:
                             req_name = fld["field_name"]
                             p_tag = fld.get("placeholder_identifier", f"{{{{{req_name.upper()}}}}}").lower()
                             if p_tag in template_text_lower or f"{{{req_name.lower()}}}" in template_text_lower:
-                                if not field_values.get(req_name):
+                                has_val = field_values.get(req_name) or (image_assets and image_assets.get(req_name))
+                                if not has_val:
                                     reason = f"Required field '{req_name}' was not provided in student generated content."
                                     errors.append(ReplacementErrorDetail(field=req_name, reason=reason))
                     if errors:
@@ -1071,21 +1073,32 @@ class PackageLevelDocxEngine:
                 if arm_f == "project_title" and phrase and phrase not in candidate_phrases:
                     candidate_phrases.append(phrase)
 
-        # Collect Page 1 paragraphs
+        # Collect title front matter paragraphs (Cover Page & Inner Title Page)
         body_elem = root.find("w:body", namespaces=NS)
         if body_elem is None:
             return False, None, None
 
         page_1_paras: List[ET._Element] = []
+        page_breaks_seen = 0
+        FRONT_MATTER_STOPPERS = (
+            "ABSTRACT", "TABLE OF CONTENTS", "CONTENTS", "CHAPTER 1",
+            "CERTIFICATE", "DECLARATION", "ACKNOWLEDGEMENT", "ACKNOWLEDGMENT"
+        )
+
         for child in body_elem:
             if child.tag.endswith("sectPr"):
                 break
             if child.tag.endswith("p"):
+                p_text_upper = "".join(child.xpath(".//w:t/text()", namespaces=NS)).strip().upper()
+                if any(p_text_upper.startswith(stopper) for stopper in FRONT_MATTER_STOPPERS):
+                    break
                 page_1_paras.append(child)
                 if child.xpath(".//w:br[@w:type='page']", namespaces=NS) or \
                    child.xpath(".//w:lastRenderedPageBreak", namespaces=NS) or \
                    child.xpath(".//w:pPr/w:sectPr", namespaces=NS):
-                    break
+                    page_breaks_seen += 1
+                    if page_breaks_seen >= 2:
+                        break
             elif child.tag.endswith("tbl"):
                 for p in child.xpath(".//w:p", namespaces=NS):
                     page_1_paras.append(p)

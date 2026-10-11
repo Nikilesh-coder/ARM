@@ -62,7 +62,7 @@ TITLE_DISQUALIFY_PATTERNS = [
     r"^declaration$", r"^bonafide\s+certificate$",
     r"^academic\s+report$", r"^project\s+report$", r"^seminar\s+report$", r"^technical\s+report$",
     r"^a\s+report\s+on$", r"^seminar\s+presentation$",
-    r"^(a\s+)?(mini|major|seminar|capstone|internship|community\s+service)?\s*(project|seminar|technical)?\s*(report|presentation)\s*(on)?$",
+    r"^(a\s+)?(mini|major|seminar|capstone|internship|community\s+service)?\s*(project|seminar|technical)?(\s*(report|presentation))?(\s*on)?$",
     r"^(on|presentation\s+on|seminar\s+presentation\s+on|project\s+report\s+on)$",
     r"^(thank\s+you|queries\??|questions\??)$",
     r"^.*thank\s+you.*$", r"^.*queries.*$",
