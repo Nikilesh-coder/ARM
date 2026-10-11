@@ -22,8 +22,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
-
 export function MasterTemplateCard() {
   const [masterTemplate, setMasterTemplate] = useState<MasterTemplateResponseDTO | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -99,7 +97,7 @@ export function MasterTemplateCard() {
 
         <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
           <a
-            href={`${API_BASE_URL}/api/v1/templates/00000000-0000-0000-0000-000000000001/raw-download`}
+            href={apiClient.getTemplateRawDownloadUrl("00000000-0000-0000-0000-000000000001")}
             target="_blank"
             rel="noopener noreferrer"
             download

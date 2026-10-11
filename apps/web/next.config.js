@@ -1,5 +1,8 @@
 /** @type {import('next').NextConfig} */
-const backendApiUrl = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
+const defaultBackend = process.env.NODE_ENV === "production"
+  ? "https://arm-backend-031f.onrender.com"
+  : "http://127.0.0.1:8000";
+const backendApiUrl = (process.env.NEXT_PUBLIC_API_URL || defaultBackend).replace(/\/+$/, "");
 
 const nextConfig = {
   reactStrictMode: true,

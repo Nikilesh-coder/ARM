@@ -14,7 +14,7 @@ import {
   ProjectIntakeData,
 } from "@/components/arm/guided-project-wizard";
 import { CreateProjectModal } from "@/components/arm/create-project-modal";
-import { apiClient, ProjectDTO } from "@/lib/api-client";
+import { apiClient, ProjectDTO, resolveApiBaseUrl } from "@/lib/api-client";
 import { ThemeToggle } from "@/components/arm/theme-toggle";
 import {
   Sparkles,
@@ -35,7 +35,7 @@ interface WorkspaceMessage {
   timestamp: string;
 }
 
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
+const getApiBaseUrl = () => resolveApiBaseUrl();
 
 function cleanTopicToAcademicTitle(raw: string): string {
   let cleaned = (raw || "").trim();
@@ -288,7 +288,7 @@ export default function ArmWorkspacePage() {
         if (hasAttachments && attachments[0].file) {
           formData.append("file", attachments[0].file);
         }
-        const tplResp = await fetch(`${API_BASE_URL}/api/v1/templates/convert-to-json`, {
+        const tplResp = await fetch(`${getApiBaseUrl()}/api/v1/templates/convert-to-json`, {
           method: "POST",
           body: hasAttachments ? formData : undefined,
         });
@@ -363,7 +363,7 @@ export default function ArmWorkspacePage() {
       try {
         const formData = new FormData();
         formData.append("file", attachments[0].file);
-        const tplResp = await fetch(`${API_BASE_URL}/api/v1/templates/convert-to-json`, {
+        const tplResp = await fetch(`${getApiBaseUrl()}/api/v1/templates/convert-to-json`, {
           method: "POST",
           body: formData,
         });
@@ -390,7 +390,7 @@ export default function ArmWorkspacePage() {
     }
     if (!activeDesign) {
       try {
-        const dResp = await fetch(`${API_BASE_URL}/api/v1/templates/active-design`);
+        const dResp = await fetch(`${getApiBaseUrl()}/api/v1/templates/active-design`);
         if (dResp.ok) {
           activeDesign = await dResp.json();
         }
@@ -425,7 +425,8 @@ export default function ArmWorkspacePage() {
       return;
     }
 
-    const generatePromise = fetch(`${API_BASE_URL}/api/v1/reports/generate`, {
+    const apiBase = getApiBaseUrl();
+    const generatePromise = fetch(`${apiBase}/api/v1/reports/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -456,10 +457,10 @@ export default function ArmWorkspacePage() {
         console.warn("Backend generation failed:", err);
         let msg = err?.message || "Generation request failed.";
         if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
-          const isLocal = API_BASE_URL.includes("localhost") || API_BASE_URL.includes("127.0.0.1");
+          const isLocal = apiBase.includes("localhost") || apiBase.includes("127.0.0.1");
           msg = isLocal
-            ? `Could not connect to ARM backend at ${API_BASE_URL}. Please ensure the local FastAPI server is running on port 8000. (${err?.message || "Failed to fetch"})`
-            : `Could not connect to ARM backend at ${API_BASE_URL}. The backend service may be waking up from sleep or experiencing network latency. (${err?.message || "Failed to fetch"})`;
+            ? `Could not connect to ARM backend at ${apiBase}. Please ensure the local FastAPI server is running on port 8000. (${err?.message || "Failed to fetch"})`
+            : `Could not connect to ARM backend at ${apiBase}. The backend service may be waking up from sleep or experiencing network latency. (${err?.message || "Failed to fetch"})`;
         }
         return { _error: msg };
       });
@@ -488,7 +489,7 @@ export default function ArmWorkspacePage() {
     const downloadUrl =
       generatedData.download_url && !generatedData.download_url.includes("localhost") && !generatedData.download_url.includes("127.0.0.1")
         ? generatedData.download_url
-        : `${API_BASE_URL}/api/v1/reports/${reportId}/download`;
+        : `${apiBase}/api/v1/reports/${reportId}/download`;
     const fileName = generatedData.file_name || `Report_${reportId}.docx`;
     const fileSize = generatedData.file_size_bytes || 41192;
 

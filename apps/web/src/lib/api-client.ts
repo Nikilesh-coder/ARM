@@ -309,15 +309,57 @@ export class ApiError extends Error {
   }
 }
 
+export const PRODUCTION_BACKEND_URL = "https://arm-backend-031f.onrender.com";
+
+export function resolveApiBaseUrl(): string {
+  const envUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
+  if (envUrl) {
+    let cleaned = envUrl.replace(/^["']+|["']+$/g, "").trim().replace(/\/+$/, "");
+    if (
+      cleaned &&
+      !cleaned.includes("YOUR_EXISTING") &&
+      cleaned.toLowerCase() !== "placeholder" &&
+      cleaned.toLowerCase() !== "undefined"
+    ) {
+      if (typeof window !== "undefined") {
+        const isLocalBrowser =
+          window.location.hostname === "localhost" ||
+          window.location.hostname === "127.0.0.1";
+        // If running in production browser but env was set to localhost, fallback to production backend
+        if (!isLocalBrowser && (cleaned.includes("localhost") || cleaned.includes("127.0.0.1"))) {
+          return PRODUCTION_BACKEND_URL;
+        }
+      }
+      return cleaned;
+    }
+  }
+
+  if (typeof window !== "undefined") {
+    const isLocalBrowser =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
+    if (isLocalBrowser) {
+      return "http://127.0.0.1:8000";
+    }
+  }
+
+  return PRODUCTION_BACKEND_URL;
+}
+
 class ReportForgeClient {
   private baseUrl: string;
 
   constructor() {
-    this.baseUrl = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
+    this.baseUrl = resolveApiBaseUrl();
+  }
+
+  private getEffectiveBaseUrl(): string {
+    return resolveApiBaseUrl();
   }
 
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const url = `${this.baseUrl}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
+    const effectiveBase = this.getEffectiveBaseUrl();
+    const url = `${effectiveBase}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
     const headers = new Headers(options.headers || {});
 
     if (!headers.has("Authorization") && typeof window !== "undefined") {
@@ -365,7 +407,15 @@ class ReportForgeClient {
       return (await response.json()) as T;
     } catch (err: any) {
       if (err instanceof ApiError) throw err;
-      throw new ApiError(err.message || "Network request failed", "NETWORK_ERROR", 0);
+      const rawMsg = err?.message || "";
+      if (rawMsg.toLowerCase().includes("failed to fetch") || rawMsg.toLowerCase().includes("networkerror")) {
+        throw new ApiError(
+          `Unable to connect to backend service (${effectiveBase}). Please check your internet connection or server availability.`,
+          "NETWORK_ERROR",
+          0
+        );
+      }
+      throw new ApiError(rawMsg || "Network request failed", "NETWORK_ERROR", 0);
     }
   }
 
@@ -559,6 +609,11 @@ class ReportForgeClient {
     return this.request<any>(`/api/v1/templates/${templateId}`, {
       method: "DELETE",
     });
+  }
+
+  getTemplateRawDownloadUrl(templateId: string): string {
+    const effectiveBase = this.getEffectiveBaseUrl();
+    return `${effectiveBase}/api/v1/templates/${templateId}/raw-download`;
   }
 
   async uploadTemplate(file: File): Promise<TemplateUploadResult> {

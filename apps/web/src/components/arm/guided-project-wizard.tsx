@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { GeneratedDocument } from "./generated-document-card";
 import { AgentStatus, AgentStage } from "./agent-status";
+import { resolveApiBaseUrl } from "@/lib/api-client";
 
 export interface BlueprintChapter {
   id: string;
@@ -375,7 +376,7 @@ export function GuidedProjectWizard({
     let realReportId = "";
     let genError: string | null = null;
     try {
-      const apiBase = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
+      const apiBase = resolveApiBaseUrl();
       const cleanProjTitle = title || "ELECTRIFY THE FUTURE: PROMOTING SAFE ELECTRICITY USE IN SCHOOLS";
       const response = await fetch(`${apiBase}/api/v1/reports/generate`, {
         method: "POST",
