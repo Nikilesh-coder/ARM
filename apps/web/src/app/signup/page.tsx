@@ -11,6 +11,7 @@ import { StatusBanner } from "@/components/ui/status-banner";
 import { Lock, Mail, User, ArrowRight, CheckCircle2, RefreshCw, AlertCircle } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth-context";
+import { GoogleAuthButton } from "@/components/arm/google-auth-button";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -103,7 +104,7 @@ export default function SignupPage() {
       const siteOrigin =
         typeof window !== "undefined"
           ? window.location.origin
-          : (process.env.NEXT_PUBLIC_SITE_URL || "https://arm-app-2.vercel.app");
+          : (process.env.NEXT_PUBLIC_SITE_URL || "https://arm-caw2.vercel.app");
       const emailRedirectTo = `${siteOrigin}/verify-email`;
 
       const { data, error } = await supabase.auth.signUp({
@@ -343,6 +344,24 @@ export default function SignupPage() {
                 message={authError}
               />
             )}
+
+            {/* Google OAuth Registration */}
+            <div className="space-y-4">
+              <GoogleAuthButton
+                mode="signup"
+                disabled={isLoading}
+                onError={(msg) => setAuthError(msg)}
+              />
+
+              <div className="relative flex items-center justify-center">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-zinc-200 dark:border-zinc-800" />
+                </div>
+                <span className="relative px-3 bg-white dark:bg-zinc-950 text-[11px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+                  or register with email
+                </span>
+              </div>
+            </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">

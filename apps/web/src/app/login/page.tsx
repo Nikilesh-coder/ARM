@@ -11,6 +11,7 @@ import { StatusBanner } from "@/components/ui/status-banner";
 import { Lock, Mail, ArrowRight, RefreshCw, CheckCircle2, KeyRound, AlertCircle, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth-context";
+import { GoogleAuthButton } from "@/components/arm/google-auth-button";
 
 function LoginFormContent() {
   const router = useRouter();
@@ -481,6 +482,24 @@ function LoginFormContent() {
                 )}
               </div>
             )}
+
+            {/* Google OAuth Sign-In */}
+            <div className="space-y-4">
+              <GoogleAuthButton
+                mode="signin"
+                disabled={isLoading}
+                onError={(msg) => setAuthError(msg)}
+              />
+
+              <div className="relative flex items-center justify-center">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-zinc-200 dark:border-zinc-800" />
+                </div>
+                <span className="relative px-3 bg-white dark:bg-zinc-950 text-[11px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+                  or continue with email
+                </span>
+              </div>
+            </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
