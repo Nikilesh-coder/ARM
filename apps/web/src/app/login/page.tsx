@@ -165,9 +165,18 @@ function LoginFormContent() {
     setResendMessage(null);
 
     try {
+      const siteOrigin =
+        typeof window !== "undefined"
+          ? window.location.origin
+          : (process.env.NEXT_PUBLIC_SITE_URL || "https://arm-app-2.vercel.app");
+      const emailRedirectTo = `${siteOrigin}/verify-email`;
+
       const { error } = await supabase.auth.resend({
         type: "signup",
         email: email.trim().toLowerCase(),
+        options: {
+          emailRedirectTo,
+        },
       });
 
       if (error) {

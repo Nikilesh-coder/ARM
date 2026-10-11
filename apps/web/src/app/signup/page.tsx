@@ -99,11 +99,18 @@ export default function SignupPage() {
         sessionStorage.setItem(`arm_signup_attempt_${cleanEmail}`, Date.now().toString());
       }
 
-      // Connect to Supabase Auth
+      // Connect to Supabase Auth with production-aware email confirmation redirect
+      const siteOrigin =
+        typeof window !== "undefined"
+          ? window.location.origin
+          : (process.env.NEXT_PUBLIC_SITE_URL || "https://arm-app-2.vercel.app");
+      const emailRedirectTo = `${siteOrigin}/verify-email`;
+
       const { data, error } = await supabase.auth.signUp({
         email: cleanEmail,
         password: password,
         options: {
+          emailRedirectTo,
           data: {
             full_name: fullName.trim(),
           },
@@ -159,9 +166,18 @@ export default function SignupPage() {
     setResendMessage(null);
 
     try {
+      const siteOrigin =
+        typeof window !== "undefined"
+          ? window.location.origin
+          : (process.env.NEXT_PUBLIC_SITE_URL || "https://arm-app-2.vercel.app");
+      const emailRedirectTo = `${siteOrigin}/verify-email`;
+
       const { error } = await supabase.auth.resend({
         type: "signup",
         email: submittedEmail,
+        options: {
+          emailRedirectTo,
+        },
       });
 
       if (error) {
