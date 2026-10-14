@@ -92,6 +92,13 @@ export default function ArmWorkspacePage() {
   const [userName, setUserName] = useState("Engineering Scholar");
   const [userEmail, setUserEmail] = useState("scholar@university.edu");
   const [activeProject, setActiveProject] = useState<ProjectDTO | null>(null);
+  const [activeReport, setActiveReport] = useState<GeneratedDocument | null>(null);
+  const [pendingProposal, setPendingProposal] = useState<{
+    reportId: string;
+    targetSection?: string;
+    instruction: string;
+    proposedAction?: string;
+  } | null>(null);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -101,6 +108,12 @@ export default function ArmWorkspacePage() {
       if (storedEmail) setUserEmail(storedEmail);
       if (localStorage.getItem("arm_selected_template_id") === "0484aecb-dbc1-4671-a388-0f820124ca0e") {
         localStorage.removeItem("arm_selected_template_id");
+      }
+      const storedReport = localStorage.getItem("arm_active_report");
+      if (storedReport) {
+        try {
+          setActiveReport(JSON.parse(storedReport));
+        } catch {}
       }
       const storedProj = localStorage.getItem("arm_active_project");
       if (storedProj) {
@@ -186,6 +199,10 @@ export default function ArmWorkspacePage() {
   };
 
   const handleWizardComplete = (intakeData: ProjectIntakeData, doc: GeneratedDocument) => {
+    setActiveReport(doc);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("arm_active_report", JSON.stringify(doc));
+    }
     const includedChapters = intakeData.blueprint.filter((b) => b.included);
     const userMsg: WorkspaceMessage = {
       id: Math.random().toString(36).substring(2, 9),
@@ -326,7 +343,110 @@ export default function ArmWorkspacePage() {
       return;
     }
 
-    // CASE 2: USER IS SEARCHING A TOPIC (OR COMBINING TEMPLATE + TOPIC)
+    // CASE 2: CONTEXT-AWARE ASSISTANT FOR EXISTING REPORT (EDIT, FEEDBACK, QUESTION)
+    const isExplicitNewReport =
+      /^(?:create|generate|write|start|build|prepare|make)\s+(?:a|an|the)?\s*(?:new|fresh)?\s*(?:project|academic)?\s*(?:report|documentation)\s+(?:on|about|for)/i.test(rawInput) ||
+      /^(?:create|generate|start)\s+(?:a|an)?\s*new\s+report/i.test(rawInput) ||
+      /^new\s+report\s*:/i.test(rawInput);
+
+    if (activeReport && !hasAttachments && !isExplicitNewReport) {
+      setCurrentStage("thinking");
+      const apiBase = getApiBaseUrl();
+
+      try {
+        const isConfirming = pendingProposal && /^(?:yes|proceed|apply|update|do it|confirm|sure|ok|okay|yep|yes please)\b/i.test(text.trim());
+        const effectiveMsg = isConfirming && pendingProposal ? pendingProposal.instruction : text;
+
+        const assistantRes = await fetch(`${apiBase}/api/v1/reports/assistant`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: effectiveMsg,
+            report_id: activeReport.id,
+            project_id: activeProject?.id,
+          }),
+        });
+
+        if (assistantRes.ok) {
+          const assistantData = await assistantRes.json();
+
+          if (assistantData.intent === "edit" || assistantData.intent === "confirmation") {
+            const editStages: AgentStage[] = ["thinking", "planning", "creating", "formatting", "validating", "finalizing"];
+            for (const st of editStages) {
+              setCurrentStage(st);
+              await new Promise((res) => setTimeout(res, 250));
+            }
+
+            const updatedDoc: GeneratedDocument = {
+              ...activeReport,
+              fileSizeBytes: assistantData.file_size_bytes || activeReport.fileSizeBytes,
+              docxDownloadUrl: assistantData.download_url || activeReport.docxDownloadUrl,
+              sections: assistantData.preview_sections || activeReport.sections,
+              sectionCount: assistantData.preview_sections?.length || activeReport.sectionCount,
+              createdAt: assistantData.updated_at || new Date().toISOString(),
+            };
+
+            setActiveReport(updatedDoc);
+            if (typeof window !== "undefined") {
+              localStorage.setItem("arm_active_report", JSON.stringify(updatedDoc));
+            }
+            setPendingProposal(null);
+
+            const assistantMsg: WorkspaceMessage = {
+              id: Math.random().toString(36).substring(2, 9),
+              role: "assistant",
+              content: `✅ **Report Updated In-Place!**\n\n• **Applied Change**: ${assistantData.changes_summary || "Section updated according to instructions."}\n• **College Template**: Layout, typography, borders, logos, and margins 100% preserved.\n• **Document Status**: Ready for download with pre-edited backup preserved.\n\nYour refined document is ready:`,
+              document: updatedDoc,
+              timestamp: new Date().toISOString(),
+            };
+
+            setMessages((prev) => [...prev, assistantMsg]);
+            setIsProcessing(false);
+            return;
+          } else if (assistantData.intent === "feedback") {
+            setPendingProposal({
+              reportId: activeReport.id,
+              targetSection: assistantData.target_section,
+              instruction: assistantData.proposed_instruction || text,
+              proposedAction: assistantData.proposed_action,
+            });
+
+            const assistantMsg: WorkspaceMessage = {
+              id: Math.random().toString(36).substring(2, 9),
+              role: "assistant",
+              content: assistantData.message || `Thank you for your feedback! Would you like me to update the report? Reply "yes" or "proceed" to apply.`,
+              timestamp: new Date().toISOString(),
+            };
+
+            setMessages((prev) => [...prev, assistantMsg]);
+            setIsProcessing(false);
+            return;
+          } else if (assistantData.intent === "question") {
+            const assistantMsg: WorkspaceMessage = {
+              id: Math.random().toString(36).substring(2, 9),
+              role: "assistant",
+              content: assistantData.answer || `Here is the requested information regarding "${activeReport.title}".`,
+              timestamp: new Date().toISOString(),
+            };
+
+            setMessages((prev) => [...prev, assistantMsg]);
+            setIsProcessing(false);
+            return;
+          }
+
+          // If assistant indicated new_report, clear activeReport and fall through to generation
+          setActiveReport(null);
+          setPendingProposal(null);
+          if (typeof window !== "undefined") {
+            localStorage.removeItem("arm_active_report");
+          }
+        }
+      } catch (assistErr) {
+        console.warn("Context-aware assistant call failed, falling back:", assistErr);
+      }
+    }
+
+    // CASE 3: USER IS SEARCHING A TOPIC (OR COMBINING TEMPLATE + TOPIC)
     let projectTitle = activeProject?.title || (searchedTopic.length >= 3 ? cleanTopicToAcademicTitle(searchedTopic) : cleanTopicToAcademicTitle(rawInput));
     let researchQuery = text.trim();
 
@@ -509,6 +629,11 @@ export default function ArmWorkspacePage() {
       sections: generatedData.preview_sections,
     };
 
+    setActiveReport(generatedDoc);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("arm_active_report", JSON.stringify(generatedDoc));
+    }
+
     const finalTitle = generatedData.title || projectTitle;
     const instDisplay = activeDesign?.institution?.name || "your institution";
     const assistantContent = `ARM has completed researching and synthesizing your academic report on **"${finalTitle}"** using Gemini AI.\n\nFollowing your uploaded template design (Canva-style text and image replacement):\n• **Template Structure & Styling**: 100% preserved from your uploaded template (${instDisplay}, official emblem logo, headings, and formatting).\n• **Matter & Research**: Replaced with comprehensive academic text specifically for "${finalTitle}".\n• **Technical Diagrams**: High-resolution figures generated specifically for "${finalTitle}".\n\nYour finalized document is ready for download in Word (.docx) format:`;
@@ -526,6 +651,11 @@ export default function ArmWorkspacePage() {
   };
 
   const handleNewChat = () => {
+    setActiveReport(null);
+    setPendingProposal(null);
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("arm_active_report");
+    }
     setMessages([]);
     setIsProcessing(false);
     setPresetInput("");

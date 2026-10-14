@@ -295,6 +295,42 @@ export interface ReportPlanResponse {
   created_at: string;
 }
 
+export interface ReportEditResultDTO {
+  report_id: string;
+  title: string;
+  status: string;
+  action_applied: string;
+  target_section: string;
+  changes_summary: string;
+  download_url: string;
+  file_name: string;
+  file_size_bytes: number;
+  preview_sections: any[];
+  backup_available: boolean;
+  updated_at: string;
+}
+
+export interface ReportAssistantResponseDTO {
+  intent: "new_report" | "edit" | "feedback" | "question" | "confirmation";
+  should_generate_new: boolean;
+  message?: string;
+  report_id?: string;
+  title?: string;
+  status?: string;
+  changes_summary?: string;
+  download_url?: string;
+  file_name?: string;
+  file_size_bytes?: number;
+  preview_sections?: any[];
+  backup_available?: boolean;
+  acknowledged_feedback?: string;
+  target_section?: string;
+  proposed_instruction?: string;
+  proposed_action?: string;
+  question?: string;
+  answer?: string;
+}
+
 export class ApiError extends Error {
   code: string;
   status: number;
@@ -701,6 +737,37 @@ class ReportForgeClient {
 
   async getReportPlan(reportId: string): Promise<ReportPlanResponse> {
     return this.request<ReportPlanResponse>(`/api/v1/reports/${reportId}/plan`);
+  }
+
+  // --- Context-Aware Report Editing & Assistant Endpoints ---
+  async editReport(
+    reportId: string,
+    instruction: string,
+    targetSection?: string
+  ): Promise<ReportEditResultDTO> {
+    return this.request<ReportEditResultDTO>(`/api/v1/reports/${reportId}/edit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instruction, target_section: targetSection }),
+    });
+  }
+
+  async revertReport(reportId: string): Promise<ReportEditResultDTO> {
+    return this.request<ReportEditResultDTO>(`/api/v1/reports/${reportId}/revert`, {
+      method: "POST",
+    });
+  }
+
+  async askReportAssistant(payload: {
+    message: string;
+    report_id?: string;
+    project_id?: string;
+  }): Promise<ReportAssistantResponseDTO> {
+    return this.request<ReportAssistantResponseDTO>("/api/v1/reports/assistant", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
   }
 
   // --- Stage 6 AI Report Planner Endpoints ---

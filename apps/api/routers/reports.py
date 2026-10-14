@@ -13,11 +13,12 @@ import tempfile
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from apps.api.core.database import db_manager
+from apps.api.core.auth import get_current_user_optional
 from apps.api.schemas.report import ReportPlanRequestDTO, ReportPlanResponseDTO, SectionPlanDTO
 from apps.api.services.document.generator import create_full_academic_report
 from apps.api.services.document.template_extractor import get_active_template_design
@@ -115,7 +116,11 @@ class GenerateReportRequest(BaseModel):
 
 
 @router.post("/generate")
-def generate_full_report(req: GenerateReportRequest, request: Request = None):
+def generate_full_report(
+    req: GenerateReportRequest,
+    request: Request = None,
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
     """
     Generates a full academic report strictly grounded in the Master College Template
     or custom user-uploaded college template using the template-preserving in-place replacement engine.
@@ -465,10 +470,12 @@ def generate_full_report(req: GenerateReportRequest, request: Request = None):
                 "job_id": report_id,
                 "document_id": report_id,
                 "project_id": req.project_id,
+                "user_id": user.get("id") if user else None,
                 "template_id": resolved_template_id,
                 "title": clean_title,
                 "fields_replaced": job_result.get("fields_replaced", 0),
                 "images_replaced": job_result.get("images_replaced", 0),
+                "preview_sections": preview_sections,
             }
         )
 
@@ -524,6 +531,8 @@ def generate_full_report(req: GenerateReportRequest, request: Request = None):
             "file_name": f"{safe_name}_ARM.{doc_ext}",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "status": "completed",
+            "preview_sections": preview_sections,
+            "field_values": field_vals,
         }
 
         # [12] Generation completed
@@ -660,3 +669,194 @@ def download_generated_report_pdf(report_id: str):
         status_code=400,
         detail="PDF output generation has been removed from ARM. Please download the report in DOCX format."
     )
+
+
+class ReportEditRequest(BaseModel):
+    instruction: str
+    target_section: Optional[str] = None
+    preview_only: Optional[bool] = False
+
+
+class ReportAssistantRequest(BaseModel):
+    message: str
+    report_id: Optional[str] = None
+    project_id: Optional[str] = None
+
+
+def _check_report_authorization(report_id: str, current_user: Optional[Dict[str, Any]] = None):
+    """
+    Verifies caller authorization for modifying a report.
+    If the report metadata contains an owner/user identity, caller must match or be admin.
+    """
+    from apps.api.services.report_file_storage_service import report_file_storage_service
+    meta = report_file_storage_service.get_report_metadata(report_id) or {}
+    owner_id = meta.get("user_id") or meta.get("owner_id")
+    if owner_id and current_user:
+        caller_id = current_user.get("id")
+        is_admin = current_user.get("metadata", {}).get("is_admin") or current_user.get("metadata", {}).get("role") == "admin"
+        if caller_id and caller_id != owner_id and not is_admin:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Unauthorized: You do not have permission to modify report '{report_id}'."
+            )
+
+
+@router.post("/{report_id}/edit")
+def edit_existing_report(
+    report_id: str,
+    req: ReportEditRequest,
+    request: Request = None,
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """
+    Context-aware in-place editing for existing academic reports.
+    Applies instructions such as 'expand the introduction', 'shorten the conclusion',
+    'correct grammar', or 'add technical details' directly to the existing report.
+    Never creates a new report topic or reconstructs document from scratch.
+    """
+    _check_report_authorization(report_id, user)
+    from apps.api.services.report_editing_service import report_editing_service
+
+    req_base = str(request.base_url).rstrip("/") if (request and request.base_url) else ""
+    backend_base_url = req_base if (req_base and "localhost" not in req_base and "127.0.0.1" not in req_base) else os.getenv("BACKEND_URL", "https://arm-backend-031f.onrender.com")
+
+    try:
+        result = report_editing_service.edit_report(
+            report_id=report_id,
+            instruction=req.instruction,
+            target_section=req.target_section,
+            preview_only=req.preview_only or False,
+            base_url=backend_base_url,
+        )
+        return result
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"[REPORT-EDIT-ERROR] Error editing report {report_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to edit report: {str(e)}")
+
+
+@router.post("/{report_id}/revert")
+def revert_existing_report(
+    report_id: str,
+    request: Request = None,
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """
+    Reverts the report to the pre-edited original backup version.
+    """
+    _check_report_authorization(report_id, user)
+    from apps.api.services.report_editing_service import report_editing_service
+
+    req_base = str(request.base_url).rstrip("/") if (request and request.base_url) else ""
+    backend_base_url = req_base if (req_base and "localhost" not in req_base and "127.0.0.1" not in req_base) else os.getenv("BACKEND_URL", "https://arm-backend-031f.onrender.com")
+
+    try:
+        return report_editing_service.revert_report(report_id=report_id, base_url=backend_base_url)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"[REPORT-REVERT-ERROR] Error reverting report {report_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to revert report: {str(e)}")
+
+
+@router.post("/assistant")
+def report_assistant_chat(
+    req: ReportAssistantRequest,
+    request: Request = None,
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """
+    Context-aware conversational routing for reports:
+    - Edit instructions -> edits existing report in-place
+    - Feedback -> acknowledges and proposes update confirmation
+    - Questions -> answers factually without generating report
+    - New report -> signals to create new report
+    """
+    if req.report_id:
+        _check_report_authorization(req.report_id, user)
+    from apps.api.services.report_editing_service import report_editing_service
+
+    req_base = str(request.base_url).rstrip("/") if (request and request.base_url) else ""
+    backend_base_url = req_base if (req_base and "localhost" not in req_base and "127.0.0.1" not in req_base) else os.getenv("BACKEND_URL", "https://arm-backend-031f.onrender.com")
+
+    classification = report_editing_service.classify_intent(req.message, active_report_id=req.report_id)
+    intent = classification.get("intent")
+
+    if intent == "new_report":
+        return {
+            "intent": "new_report",
+            "should_generate_new": True,
+            "message": "Starting new report workflow.",
+        }
+
+    if not req.report_id:
+        return {
+            "intent": "new_report",
+            "should_generate_new": True,
+            "message": "No active report selected. Starting new report workflow.",
+        }
+
+    lower_msg = req.message.lower().strip()
+    if any(k in lower_msg for k in ["revert", "undo", "restore backup", "restore original", "go back to original"]):
+        revert_res = report_editing_service.revert_report(report_id=req.report_id, base_url=backend_base_url)
+        return {
+            "intent": "edit",
+            "should_generate_new": False,
+            "changes_summary": "Reverted document to pre-edited backup state.",
+            **revert_res,
+        }
+
+    if intent == "edit":
+        result = report_editing_service.edit_report(
+            report_id=req.report_id,
+            instruction=req.message,
+            target_section=classification.get("target_section"),
+            base_url=backend_base_url,
+        )
+        return {
+            "intent": "edit",
+            "should_generate_new": False,
+            **result,
+        }
+
+    elif intent == "feedback":
+        feedback_res = report_editing_service.handle_feedback(
+            report_id=req.report_id,
+            feedback=req.message,
+        )
+        return {
+            "intent": "feedback",
+            "should_generate_new": False,
+            **feedback_res,
+        }
+
+    elif intent == "question":
+        q_res = report_editing_service.answer_question(
+            report_id=req.report_id,
+            question=req.message,
+        )
+        return {
+            "intent": "question",
+            "should_generate_new": False,
+            **q_res,
+        }
+
+    elif intent == "confirmation":
+        result = report_editing_service.edit_report(
+            report_id=req.report_id,
+            instruction=req.message,
+            target_section=classification.get("target_section"),
+            base_url=backend_base_url,
+        )
+        return {
+            "intent": "confirmation",
+            "should_generate_new": False,
+            **result,
+        }
+
+    return {
+        "intent": "question",
+        "should_generate_new": False,
+        "message": "How can I help you refine this report? You can ask me to expand, shorten, or correct any chapter.",
+    }
