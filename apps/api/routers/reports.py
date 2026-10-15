@@ -461,25 +461,7 @@ def generate_full_report(
             )
             raise RuntimeError(f"Generated report document missing on disk: {gen_docx}")
 
-        doc_ext = Path(gen_docx).suffix.lstrip(".").lower() or "docx"
-        canonical_doc_path, storage_key = report_file_storage_service.save_report_file_atomically(
-            report_id=report_id,
-            source_data_or_path=gen_docx,
-            extension=doc_ext,
-            metadata={
-                "job_id": report_id,
-                "document_id": report_id,
-                "project_id": req.project_id,
-                "user_id": user.get("id") if user else None,
-                "template_id": resolved_template_id,
-                "title": clean_title,
-                "fields_replaced": job_result.get("fields_replaced", 0),
-                "images_replaced": job_result.get("images_replaced", 0),
-                "preview_sections": preview_sections,
-            }
-        )
-
-        active_docx = str(canonical_doc_path)
+        active_docx = str(gen_docx)
         file_size = os.path.getsize(active_docx)
         safe_name = re.sub(r'[^a-zA-Z0-9]', '_', clean_title)[:30] or "Report"
 
@@ -510,6 +492,36 @@ def generate_full_report(
                     "wordCount": len(content_str.split()),
                     "content": content_str[:1200]
                 })
+
+        if not preview_sections:
+            try:
+                import docx as pydocx
+                from apps.api.services.report_editing_service import report_editing_service
+                extracted = report_editing_service._extract_sections_from_doc(pydocx.Document(str(gen_docx)))
+                preview_sections = report_editing_service._build_preview_sections(extracted)
+            except Exception as extract_err:
+                logger.debug(f"Fallback preview section extraction skipped: {extract_err}")
+
+        doc_ext = Path(gen_docx).suffix.lstrip(".").lower() or "docx"
+        canonical_doc_path, storage_key = report_file_storage_service.save_report_file_atomically(
+            report_id=report_id,
+            source_data_or_path=gen_docx,
+            extension=doc_ext,
+            metadata={
+                "job_id": report_id,
+                "document_id": report_id,
+                "project_id": req.project_id,
+                "user_id": user.get("id") if user else None,
+                "template_id": resolved_template_id,
+                "title": clean_title,
+                "fields_replaced": job_result.get("fields_replaced", 0),
+                "images_replaced": job_result.get("images_replaced", 0),
+                "preview_sections": preview_sections,
+            }
+        )
+
+        active_docx = str(canonical_doc_path)
+        file_size = os.path.getsize(active_docx)
 
         # [11] Report record saved
         current_stage = "Report record saved"
@@ -799,26 +811,40 @@ def report_assistant_chat(
 
     lower_msg = req.message.lower().strip()
     if any(k in lower_msg for k in ["revert", "undo", "restore backup", "restore original", "go back to original"]):
-        revert_res = report_editing_service.revert_report(report_id=req.report_id, base_url=backend_base_url)
-        return {
-            "intent": "edit",
-            "should_generate_new": False,
-            "changes_summary": "Reverted document to pre-edited backup state.",
-            **revert_res,
-        }
+        try:
+            revert_res = report_editing_service.revert_report(report_id=req.report_id, base_url=backend_base_url)
+            return {
+                "intent": "edit",
+                "should_generate_new": False,
+                "changes_summary": "Reverted document to pre-edited backup state.",
+                **revert_res,
+            }
+        except FileNotFoundError as fnf_err:
+            return {
+                "intent": "feedback",
+                "should_generate_new": False,
+                "message": f"Cannot revert: {str(fnf_err)}",
+            }
 
     if intent == "edit":
-        result = report_editing_service.edit_report(
-            report_id=req.report_id,
-            instruction=req.message,
-            target_section=classification.get("target_section"),
-            base_url=backend_base_url,
-        )
-        return {
-            "intent": "edit",
-            "should_generate_new": False,
-            **result,
-        }
+        try:
+            result = report_editing_service.edit_report(
+                report_id=req.report_id,
+                instruction=req.message,
+                target_section=classification.get("target_section"),
+                base_url=backend_base_url,
+            )
+            return {
+                "intent": "edit",
+                "should_generate_new": False,
+                **result,
+            }
+        except FileNotFoundError:
+            return {
+                "intent": "new_report",
+                "should_generate_new": True,
+                "message": f"Report '{req.report_id}' was not found in active storage. Starting new report workflow.",
+            }
 
     elif intent == "feedback":
         feedback_res = report_editing_service.handle_feedback(
@@ -843,17 +869,24 @@ def report_assistant_chat(
         }
 
     elif intent == "confirmation":
-        result = report_editing_service.edit_report(
-            report_id=req.report_id,
-            instruction=req.message,
-            target_section=classification.get("target_section"),
-            base_url=backend_base_url,
-        )
-        return {
-            "intent": "confirmation",
-            "should_generate_new": False,
-            **result,
-        }
+        try:
+            result = report_editing_service.edit_report(
+                report_id=req.report_id,
+                instruction=req.message,
+                target_section=classification.get("target_section"),
+                base_url=backend_base_url,
+            )
+            return {
+                "intent": "confirmation",
+                "should_generate_new": False,
+                **result,
+            }
+        except FileNotFoundError:
+            return {
+                "intent": "new_report",
+                "should_generate_new": True,
+                "message": f"Report '{req.report_id}' was not found in active storage. Starting new report workflow.",
+            }
 
     return {
         "intent": "question",

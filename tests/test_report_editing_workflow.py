@@ -433,3 +433,58 @@ def test_ooxml_margins_and_geometry_preservation(sample_test_report):
     assert "autonomous navigation framework for electric ground vehicles" in full_text, "Abstract text was corrupted or lost during conclusion edit!"
     assert "IEEE Transactions on Intelligent Transportation Systems" in full_text, "References text was corrupted or lost during conclusion edit!"
 
+
+def test_assistant_nonexistent_report_graceful_fallback():
+    """Verify that assistant gracefully handles a non-existent report ID without raising a 500 error."""
+    res = client.post(
+        "/api/v1/reports/assistant",
+        json={
+            "message": "expand the introduction section",
+            "report_id": "nonexistent-report-uuid-9999",
+        }
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["intent"] == "new_report"
+    assert data["should_generate_new"] is True
+    assert "was not found in active storage" in data["message"]
+
+
+def test_report_generation_preview_sections_scoping(monkeypatch, sample_test_report):
+    """Verify that report generation correctly builds preview_sections without scoping errors."""
+    from apps.api.services.replacement_engine_service import replacement_engine_service
+
+    doc_path = sample_test_report["doc_path"]
+
+    def mock_execute(*args, **kwargs):
+        return {
+            "state": "COMPLETED",
+            "docx_path": str(doc_path),
+            "output_path": str(doc_path),
+            "fields_replaced": 5,
+            "images_replaced": 1,
+            "field_values": {
+                "introduction": "This is a synthesized test introduction for autonomous vehicles.",
+                "conclusion": "This is a synthesized test conclusion with high technical fidelity."
+            }
+        }
+
+    monkeypatch.setattr(replacement_engine_service, "execute_replacement", mock_execute)
+    monkeypatch.setattr("apps.api.services.template_resolver.resolve_selected_template_path", lambda tpl_id: (str(doc_path), "test_tpl_123"))
+
+    res = client.post(
+        "/api/v1/reports/generate",
+        json={
+            "title": "Autonomous Ground Vehicles",
+            "topic": "Autonomous Ground Vehicles",
+            "template_id": "test_tpl_123",
+        }
+    )
+    assert res.status_code == 200, f"Expected 200 but got {res.status_code}: {res.text}"
+    data = res.json()
+    assert "preview_sections" in data
+    assert len(data["preview_sections"]) >= 1
+    assert data["preview_sections"][0]["title"] == "Chapter 1: Introduction"
+
+
+
