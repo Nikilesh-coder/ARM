@@ -811,32 +811,59 @@ class ReplacementEngineService:
 
         # Enrich custom_image_mapping with exact slide context (heading, matter, slide_num)
         if custom_image_mapping and slide_context_map:
+            # Filter candidate slides for replaceable images (never match to references, citations, bibliography, acknowledgements)
+            candidate_slides = {
+                s_num: s_info for s_num, s_info in slide_context_map.items()
+                if not any(w in (s_info.get("new_heading") or s_info.get("original_heading") or "").lower() for w in ("reference", "citation", "bibliography", "acknowledgement", "thank you"))
+            } or slide_context_map
+
             slide_image_counts: Dict[int, int] = {}
+            last_matched_slide = None
             for im in custom_image_mapping:
                 p_idx = im.get("paragraph_idx", 0)
+                h_orig = (im.get("heading") or "").strip().lower()
                 matched_slide = None
-                # Primary: continuous paragraph range of the slide
-                for s_num, s_info in slide_context_map.items():
-                    s_start = s_info.get("start_paragraph_idx", s_info.get("paragraph_indices", [0])[0] if s_info.get("paragraph_indices") else 0)
-                    s_end = s_info.get("end_paragraph_idx", s_info.get("paragraph_indices", [0])[-1] if s_info.get("paragraph_indices") else 0)
-                    if s_start <= p_idx <= s_end:
-                        matched_slide = s_info
-                        break
-                # Secondary: paragraph index bounds
+
+                # Step 1: Heading matching (exact or substring against original or newly mapped slide heading)
+                if h_orig:
+                    for s_num, s_info in candidate_slides.items():
+                        s_orig = (s_info.get("original_heading") or "").strip().lower()
+                        s_new = (s_info.get("new_heading") or "").strip().lower()
+                        if (h_orig and s_orig and (h_orig in s_orig or s_orig in h_orig)) or (h_orig and s_new and (h_orig in s_new or s_new in h_orig)):
+                            matched_slide = s_info
+                            break
+
+                # Step 2: Continuous paragraph range of the slide within candidate slides
                 if not matched_slide:
-                    for s_num, s_info in slide_context_map.items():
+                    for s_num, s_info in candidate_slides.items():
+                        s_start = s_info.get("start_paragraph_idx", s_info.get("paragraph_indices", [0])[0] if s_info.get("paragraph_indices") else 0)
+                        s_end = s_info.get("end_paragraph_idx", s_info.get("paragraph_indices", [0])[-1] if s_info.get("paragraph_indices") else 0)
+                        if s_start <= p_idx <= s_end:
+                            matched_slide = s_info
+                            break
+
+                # Step 3: Paragraph index bounds within candidate slides
+                if not matched_slide:
+                    for s_num, s_info in candidate_slides.items():
                         p_indices = s_info.get("paragraph_indices", [])
                         if p_indices and (p_indices[0] <= p_idx <= p_indices[-1]):
                             matched_slide = s_info
                             break
-                # Tertiary: nearest slide boundary
-                if not matched_slide and slide_context_map:
+
+                # Step 4: Adjacent inheritance (images in the same cluster/table inherit prior image's slide)
+                if not matched_slide and last_matched_slide:
+                    matched_slide = last_matched_slide
+
+                # Step 5: Nearest non-reference slide boundary
+                if not matched_slide and candidate_slides:
                     matched_slide = min(
-                        slide_context_map.values(),
+                        candidate_slides.values(),
                         key=lambda s: abs(p_idx - (s.get("start_paragraph_idx", s.get("paragraph_indices", [0])[0] if s.get("paragraph_indices") else 0))),
                         default=None
                     )
+
                 if matched_slide:
+                    last_matched_slide = matched_slide
                     s_id = matched_slide["slide_num"]
                     im["slide_num"] = s_id
                     im["new_heading"] = matched_slide.get("new_heading") or im.get("heading")

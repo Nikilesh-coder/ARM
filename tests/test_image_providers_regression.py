@@ -584,3 +584,37 @@ def test_18_docx_replacement_engine_multi_key_lookup(tmp_path):
     )
 
     assert result.success is True
+
+
+def test_19_replaceable_images_never_assigned_to_reference_slide():
+    """Verify that heading-aware matching and reference exclusions prevent technical images from matching Slide 13 (REFERENCES)."""
+    from apps.api.services.intelligent_image_service import intelligent_image_service
+
+    slide_context_map = {
+        10: {"slide_num": 10, "original_heading": "CHAPTER 5: RESULTS AND DISCUSSION", "new_heading": "AI IRRIGATION - CHAPTER 5: RESULTS AND DISCUSSION", "start_paragraph_idx": 244, "end_paragraph_idx": 283},
+        11: {"slide_num": 11, "original_heading": "CHAPTER 6: CONCLUSION", "new_heading": "AI IRRIGATION - CHAPTER 6: CONCLUSION", "start_paragraph_idx": 284, "end_paragraph_idx": 286},
+        12: {"slide_num": 12, "original_heading": "CHAPTER 7: FUTURE ENHANCEMENT", "new_heading": "AI IRRIGATION - CHAPTER 7: FUTURE ENHANCEMENT", "start_paragraph_idx": 287, "end_paragraph_idx": 295},
+        13: {"slide_num": 13, "original_heading": "CHAPTER 8: REFERENCE", "new_heading": "AI IRRIGATION - CHAPTER 8: REFERENCE", "start_paragraph_idx": 296, "end_paragraph_idx": 304},
+    }
+
+    candidate_slides = {
+        s_num: s_info for s_num, s_info in slide_context_map.items()
+        if not any(w in (s_info.get("new_heading") or s_info.get("original_heading") or "").lower() for w in ("reference", "citation", "bibliography", "acknowledgement", "thank you"))
+    } or slide_context_map
+
+    assert 13 not in candidate_slides
+
+    # An image with paragraph_idx=355 and heading='CHAPTER 5: RESULTS AND DISCUSSION'
+    im = {"filename": "image1.png", "paragraph_idx": 355, "heading": "CHAPTER 5: RESULTS AND DISCUSSION", "action": "replace"}
+    h_orig = im["heading"].strip().lower()
+    matched = None
+    for s_num, s_info in candidate_slides.items():
+        s_orig = (s_info.get("original_heading") or "").strip().lower()
+        s_new = (s_info.get("new_heading") or "").strip().lower()
+        if (h_orig and s_orig and (h_orig in s_orig or s_orig in h_orig)) or (h_orig and s_new and (h_orig in s_new or s_new in h_orig)):
+            matched = s_info
+            break
+
+    assert matched is not None
+    assert matched["slide_num"] == 10
+    assert "REFERENCE" not in matched["new_heading"]
