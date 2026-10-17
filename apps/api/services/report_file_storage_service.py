@@ -200,6 +200,7 @@ class ReportFileStorageService:
                     if metadata:
                         meta_record.update({k: v for k, v in metadata.items() if k not in meta_record})
                     cls._save_metadata(clean_id, meta_record)
+                    cls._sync_to_cloud_storage(clean_id, canonical_path, clean_ext)
                     logger.info(f"[STORAGE-SAVE-SUCCESS] Report '{clean_id}' already at canonical destination.")
                     return canonical_path, storage_key
 
@@ -260,6 +261,7 @@ class ReportFileStorageService:
                 meta_record.update({k: v for k, v in metadata.items() if k not in meta_record})
 
             cls._save_metadata(clean_id, meta_record)
+            cls._sync_to_cloud_storage(clean_id, canonical_path, clean_ext)
 
             logger.info(
                 f"[STORAGE-SAVE-SUCCESS] Report '{clean_id}' saved atomically.\n"
@@ -278,6 +280,22 @@ class ReportFileStorageService:
                     pass
             logger.error(f"[STORAGE-SAVE-ERROR] Failed to save report file for '{clean_id}': {ex}")
             raise
+
+    @classmethod
+    def _sync_to_cloud_storage(cls, report_id: str, local_path: Path, extension: str) -> None:
+        """Uploads a canonical report file to persistent cloud storage (e.g. Supabase Storage bucket)."""
+        try:
+            from apps.api.services.storage import get_storage_provider
+            storage = get_storage_provider()
+            bucket = getattr(settings.storage, "bucket_reports", "reports")
+            remote_path = f"{report_id}.{extension}"
+            content_type = cls.get_media_type(extension)
+            with open(local_path, "rb") as f_in:
+                data_bytes = f_in.read()
+            storage.upload_file(bucket=bucket, path=remote_path, data=data_bytes, content_type=content_type)
+            logger.info(f"[STORAGE-CLOUD-SYNC] Successfully synced report '{report_id}' ({len(data_bytes)} bytes) to bucket '{bucket}' at '{remote_path}'")
+        except Exception as ex:
+            logger.warning(f"[STORAGE-CLOUD-SYNC-WARN] Could not sync report '{report_id}' to cloud storage: {ex}")
 
     @classmethod
     def resolve_report_file(cls, report_id: str) -> Dict[str, Any]:
@@ -391,7 +409,52 @@ class ReportFileStorageService:
                     "metadata": alias_meta,
                 }
 
-        # Not found on disk: return diagnostic report
+        # Check 5: If not found on local ephemeral disk (e.g. Render restart/redeployment),
+        # attempt to restore canonical file from persistent cloud storage.
+        default_ext = meta.get("extension", "docx") if meta else "docx"
+        try:
+            from apps.api.services.storage import get_storage_provider
+            storage = get_storage_provider()
+            bucket = getattr(settings.storage, "bucket_reports", "reports")
+            for ext_candidate in ([default_ext] if default_ext else ["docx", "pptx"]):
+                remote_path = f"{clean_id}.{ext_candidate}"
+                try:
+                    cloud_bytes = storage.download_file(bucket=bucket, path=remote_path)
+                    if cloud_bytes and len(cloud_bytes) > 0:
+                        restored_path = cls.get_canonical_path(clean_id, ext_candidate)
+                        restored_path.parent.mkdir(parents=True, exist_ok=True)
+                        with open(restored_path, "wb") as f_restored:
+                            f_restored.write(cloud_bytes)
+                        meta_record = meta or {
+                            "report_id": clean_id,
+                            "storage_key": cls.get_storage_key(clean_id, ext_candidate),
+                            "file_path": str(restored_path),
+                            "extension": ext_candidate,
+                            "file_size": len(cloud_bytes),
+                            "status": "completed",
+                            "restored_from_cloud": True,
+                        }
+                        cls._save_metadata(clean_id, meta_record)
+                        logger.info(
+                            f"[STORAGE-CLOUD-RESTORE] Restored report '{clean_id}' ({len(cloud_bytes)} bytes) "
+                            f"from cloud bucket '{bucket}' to local '{restored_path}'"
+                        )
+                        return {
+                            "found": True,
+                            "report_id": clean_id,
+                            "file_path": str(restored_path),
+                            "storage_key": cls.get_storage_key(clean_id, ext_candidate),
+                            "extension": ext_candidate,
+                            "file_size": len(cloud_bytes),
+                            "status": "completed",
+                            "metadata": meta_record,
+                        }
+                except Exception as dl_err:
+                    logger.debug(f"[STORAGE-CLOUD-RESTORE-MISS] Cloud miss for '{remote_path}': {dl_err}")
+        except Exception as cloud_err:
+            logger.warning(f"[STORAGE-CLOUD-RESTORE-WARN] Could not query cloud storage: {cloud_err}")
+
+        # Not found on disk or cloud: return diagnostic report
         default_ext = meta.get("extension", "docx") if meta else "docx"
         canonical_p = cls.get_canonical_path(clean_id, default_ext)
         storage_key = cls.get_storage_key(clean_id, default_ext)

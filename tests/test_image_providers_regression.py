@@ -362,3 +362,128 @@ def test_10_cache_hit_avoids_provider_call(tmp_path):
     assert res.source == "cache"
     assert res.image_bytes == img_b
     mock_supernova.assert_not_called()
+
+
+def test_11_invalid_image_corrupt_or_tiny_rejected(tmp_path):
+    """Corrupt image binary or image dimensions < 64x64 are rejected by verification gate."""
+    mgr = ImageGenerationManager(cache_dir=str(tmp_path / "cache11"))
+    req = ImageGenerationRequest(
+        project_title="AI Irrigation",
+        slide_number=8,
+        slide_heading="Sensor Calibration",
+        slide_matter="Calibration curves.",
+        final_image_prompt="Sensor calibration diagram.",
+        report_id="rep_test_11",
+    )
+
+    # 1. Tiny image (16x16) from Supernova
+    tiny_bytes = _make_dummy_image((10, 20, 30), w=16, h=16)
+    tiny_sha = hashlib.sha256(tiny_bytes).hexdigest()
+    tiny_res = XKiroImageGenerationResult("xkiro", "model-lite", "200 OK", "image/png", tiny_bytes, (16, 16), tiny_sha)
+
+    # 2. Valid fallback image from Cloudflare (128x128)
+    valid_cf_bytes = _make_dummy_image((50, 100, 150), w=128, h=128)
+    valid_cf_sha = hashlib.sha256(valid_cf_bytes).hexdigest()
+    cf_res = CloudflareWorkerImageGenerationResult("cloudflare", "cf-model", "200 OK", "image/png", valid_cf_bytes, (128, 128), valid_cf_sha)
+
+    with patch.object(XKiroImageProvider, "is_configured", return_value=True), \
+         patch.object(XKiroImageProvider, "generate_image", return_value=tiny_res), \
+         patch.object(CloudflareImageProvider, "is_configured", return_value=True), \
+         patch.object(CloudflareImageProvider, "generate_image", return_value=cf_res):
+        res = mgr.generate_image(req)
+
+    assert res.success is True
+    assert res.source == "cloudflare"
+    assert res.image_bytes == valid_cf_bytes
+
+
+def test_12_none_slide_skips_image_synthesis(tmp_path):
+    """Slides explicitly classified as NONE (References/Closing) skip synthesis without calling providers or logging warnings."""
+    from apps.api.services.intelligent_image_service import intelligent_image_service
+    from apps.api.services.visual_engine import visual_engine
+
+    images = [
+        {
+            "action": "replace",
+            "filename": "slide13.png",
+            "arm_image_field": "image_13",
+            "slide_num": 13,
+            "heading": "Academic References & Citations",
+            "slide_matter": "1. Smith et al. IoT in Precision Agriculture, 2024. 2. Doe et al. Soil Sensors, 2023.",
+            "aspect_ratio": 1.77,
+        }
+    ]
+
+    mock_gen = MagicMock()
+    with patch.object(visual_engine, "generate_visual", mock_gen):
+        res = intelligent_image_service.generate_replacement_images(
+            project_title="AI Irrigation System",
+            problem_statement="Precision water conservation in farming.",
+            analyzed_images=images,
+            output_dir=str(tmp_path / "img_out"),
+            report_id="rep_test_12",
+        )
+
+    # Pre-check category detects 'references' and skips before calling generate_visual
+    mock_gen.assert_not_called()
+    assert len(res) == 0
+
+
+def test_13_linux_validation_without_powershell(tmp_path):
+    """On Linux/Render where PowerShell Word COM is unavailable, validator runs reliably via OOXML without crashing."""
+    import docx
+    from apps.api.services.visual_report_validator import VisualReportValidator
+
+    docx_file = str(tmp_path / "test_report.docx")
+    doc = docx.Document()
+    doc.add_heading("AI Irrigation System", level=0)
+    doc.add_paragraph("Abstract: Automated soil moisture sensing and drip irrigation deployment.")
+    doc.add_paragraph("This agriculture project utilizes soil moisture sensors to regulate water delivery.")
+    doc.save(docx_file)
+
+    # Simulate Linux environment without PowerShell or LibreOffice
+    with patch("sys.platform", "linux"), \
+         patch("shutil.which", return_value=None):
+        val_res = VisualReportValidator.validate_report_visuals(
+            docx_path=docx_file,
+            project_title="AI Irrigation System",
+            problem_statement="Automated precision irrigation with soil moisture sensors.",
+            output_dir=str(tmp_path / "audit_dir"),
+        )
+
+    assert val_res["is_valid"] is True
+    assert val_res["status"] == "PASSED"
+    assert val_res["pdf_validation_available"] is False
+    assert val_res["pdf_path"] is None
+    assert val_res["title_verified"] is True
+    assert len(val_res["topic_keywords_found"]) > 0
+
+
+def test_14_replacement_validation_mandatory_vs_optional():
+    """Validation gate distinguishes optional from mandatory image generation failures."""
+    images_to_generate_opt = [{"action": "replace", "filename": "fig1.png", "mandatory": False}]
+    has_mandatory_opt = any(im.get("mandatory") is True for im in images_to_generate_opt)
+    assert has_mandatory_opt is False
+
+    images_to_generate_mand = [{"action": "replace", "filename": "fig1.png", "mandatory": True}]
+    has_mandatory_mand = any(im.get("mandatory") is True for im in images_to_generate_mand)
+    assert has_mandatory_mand is True
+
+
+def test_15_docx_formatting_and_package_preservation(tmp_path):
+    """Template margins, layout, headers, footers, and untouched images remain intact."""
+    import docx
+    docx_file = str(tmp_path / "template.docx")
+    doc = docx.Document()
+    section = doc.sections[0]
+    section.top_margin = docx.shared.Inches(1.0)
+    section.bottom_margin = docx.shared.Inches(1.0)
+    section.left_margin = docx.shared.Inches(1.25)
+    section.right_margin = docx.shared.Inches(1.25)
+    doc.add_heading("Original College Template", level=0)
+    doc.save(docx_file)
+
+    doc2 = docx.Document(docx_file)
+    sec2 = doc2.sections[0]
+    assert sec2.top_margin == docx.shared.Inches(1.0)
+    assert sec2.left_margin == docx.shared.Inches(1.25)

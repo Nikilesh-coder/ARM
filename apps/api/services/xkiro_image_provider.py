@@ -182,32 +182,73 @@ class XKiroImageProvider:
             "size": "1024x1024",
         }
 
-        # Step 1: Submit generation job
-        try:
-            with httpx.Client(timeout=30.0) as client:
-                submit_resp = client.post(
-                    f"{base_url}/v1/images/generations",
-                    json=payload,
-                    headers=headers,
+        # Step 1: Submit generation job with bounded retries & exponential backoff
+        max_retries = 2
+        submit_resp = None
+        for attempt in range(max_retries + 1):
+            try:
+                with httpx.Client(timeout=30.0) as client:
+                    submit_resp = client.post(
+                        f"{base_url}/v1/images/generations",
+                        json=payload,
+                        headers=headers,
+                    )
+            except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.NetworkError) as err:
+                if attempt < max_retries:
+                    backoff = 1.5 * (2 ** attempt)
+                    logger.warning(f"[xKiro] Transient network error (attempt {attempt+1}/{max_retries+1}): {cls._sanitize(str(err))}. Retrying in {backoff:.1f}s...")
+                    time.sleep(backoff)
+                    continue
+                else:
+                    logger.error(f"[xKiro] Network error submitting generation request after {max_retries+1} attempts: {cls._sanitize(str(err))}")
+                    image_provider_health_manager.record_failure(
+                        cls.PROVIDER_NAME,
+                        reason=f"Network error after {max_retries+1} attempts: {cls._sanitize(str(err))}",
+                    )
+                    return None
+            except Exception as err:
+                logger.error(f"[xKiro] Fatal submission error: {cls._sanitize(str(err))}")
+                image_provider_health_manager.record_failure(
+                    cls.PROVIDER_NAME,
+                    reason=f"Fatal error: {cls._sanitize(str(err))}",
                 )
-        except Exception as err:
-            logger.error(f"[xKiro] Network error submitting generation request: {cls._sanitize(str(err))}")
-            image_provider_health_manager.record_failure(
-                cls.PROVIDER_NAME,
-                reason=f"Network error: {cls._sanitize(str(err))}",
-            )
-            return None
+                return None
 
-        if submit_resp.status_code not in (200, 201, 202):
+            if submit_resp.status_code in (200, 201, 202):
+                break
+
+            # Handle 429 Rate Limit with Retry-After
+            if submit_resp.status_code == 429 and attempt < max_retries:
+                retry_after_hdr = submit_resp.headers.get("Retry-After")
+                try:
+                    retry_wait = float(retry_after_hdr) if retry_after_hdr else (2.0 * (attempt + 1))
+                except (ValueError, TypeError):
+                    retry_wait = 2.0 * (attempt + 1)
+                if retry_wait <= 10.0:
+                    logger.warning(f"[xKiro] Rate limited (429). Respecting Retry-After: waiting {retry_wait:.1f}s (attempt {attempt+1}/{max_retries+1})...")
+                    time.sleep(retry_wait)
+                    continue
+
+            # Handle 5xx Transient Server Error
+            if 500 <= submit_resp.status_code < 600 and attempt < max_retries:
+                backoff = 2.0 * (attempt + 1)
+                logger.warning(f"[xKiro] Server error {submit_resp.status_code}. Retrying in {backoff:.1f}s (attempt {attempt+1}/{max_retries+1})...")
+                time.sleep(backoff)
+                continue
+
+            # Fatal error or credit exhaustion: do not retry
             err_msg = cls._sanitize(submit_resp.text[:300])
             logger.error(f"[xKiro] Submission failed (HTTP {submit_resp.status_code}): {err_msg}")
-            is_quota = submit_resp.status_code in (402, 429)
+            is_quota = submit_resp.status_code in (402, 429) or "quota" in err_msg.lower() or "limit" in err_msg.lower()
             image_provider_health_manager.record_failure(
                 cls.PROVIDER_NAME,
                 reason=f"API error HTTP {submit_resp.status_code}: {err_msg}",
                 status_code=submit_resp.status_code,
                 is_exhausted=is_quota,
             )
+            return None
+
+        if not submit_resp or submit_resp.status_code not in (200, 201, 202):
             return None
 
         try:
@@ -269,21 +310,30 @@ class XKiroImageProvider:
             )
             return None
 
-        # Step 3: Download image from CDN
+        # Step 3: Download image from CDN with bounded retry
         logger.info("[xKiro] Downloading image asset from CDN...")
-        try:
-            with httpx.Client(timeout=30.0) as client:
-                img_resp = client.get(cdn_url)
-            if img_resp.status_code != 200:
-                logger.error(f"[xKiro] Failed to download image from CDN (HTTP {img_resp.status_code})")
-                image_provider_health_manager.record_failure(cls.PROVIDER_NAME, reason=f"CDN download HTTP {img_resp.status_code}", status_code=img_resp.status_code)
+        img_resp = None
+        for dl_attempt in range(2):
+            try:
+                with httpx.Client(timeout=30.0) as client:
+                    img_resp = client.get(cdn_url)
+                if img_resp.status_code == 200:
+                    break
+            except Exception as ex:
+                if dl_attempt == 0:
+                    time.sleep(1.5)
+                    continue
+                logger.error(f"[xKiro] Network error downloading image from CDN: {cls._sanitize(str(ex))}")
+                image_provider_health_manager.record_failure(cls.PROVIDER_NAME, reason=f"CDN network error: {cls._sanitize(str(ex))}")
                 return None
-            raw_bytes = img_resp.content
-        except Exception as ex:
-            logger.error(f"[xKiro] Network error downloading image from CDN: {cls._sanitize(str(ex))}")
-            image_provider_health_manager.record_failure(cls.PROVIDER_NAME, reason=f"CDN network error: {cls._sanitize(str(ex))}")
+
+        if not img_resp or img_resp.status_code != 200:
+            status_code = img_resp.status_code if img_resp else 500
+            logger.error(f"[xKiro] Failed to download image from CDN (HTTP {status_code})")
+            image_provider_health_manager.record_failure(cls.PROVIDER_NAME, reason=f"CDN download HTTP {status_code}", status_code=status_code)
             return None
 
+        raw_bytes = img_resp.content
         if len(raw_bytes) < 100:
             logger.error("[xKiro] Downloaded image payload too small to be valid.")
             image_provider_health_manager.record_failure(cls.PROVIDER_NAME, reason="CDN payload too small")
@@ -295,6 +345,9 @@ class XKiroImageProvider:
                 pil_img.verify()
 
             with PILImage.open(io.BytesIO(raw_bytes)) as pil_img:
+                if pil_img.width < 64 or pil_img.height < 64:
+                    logger.error(f"[xKiro] Image dimensions {pil_img.size} too small to be acceptable.")
+                    return None
                 buf = io.BytesIO()
                 pil_img.convert("RGB").save(buf, format="PNG")
                 png_bytes = buf.getvalue()

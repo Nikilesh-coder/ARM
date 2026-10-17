@@ -502,6 +502,14 @@ def generate_full_report(
             except Exception as extract_err:
                 logger.debug(f"Fallback preview section extraction skipped: {extract_err}")
 
+        images_replaced = job_result.get("images_replaced", 0)
+        report_warnings = list(job_result.get("warnings") or [])
+        report_status = "completed"
+        if report_warnings or images_replaced == 0:
+            report_status = "completed_with_warnings"
+            if images_replaced == 0 and not any("0 new images" in w for w in report_warnings):
+                report_warnings.append("0 new images were replaced (external visual providers unavailable or quota exhausted; template figures preserved)")
+
         doc_ext = Path(gen_docx).suffix.lstrip(".").lower() or "docx"
         canonical_doc_path, storage_key = report_file_storage_service.save_report_file_atomically(
             report_id=report_id,
@@ -515,7 +523,9 @@ def generate_full_report(
                 "template_id": resolved_template_id,
                 "title": clean_title,
                 "fields_replaced": job_result.get("fields_replaced", 0),
-                "images_replaced": job_result.get("images_replaced", 0),
+                "images_replaced": images_replaced,
+                "status": report_status,
+                "warnings": report_warnings,
                 "preview_sections": preview_sections,
             }
         )
@@ -542,9 +552,12 @@ def generate_full_report(
             "storage_key": storage_key,
             "file_name": f"{safe_name}_ARM.{doc_ext}",
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "status": "completed",
+            "status": report_status,
             "preview_sections": preview_sections,
             "field_values": field_vals,
+            "fields_replaced": job_result.get("fields_replaced", 0),
+            "images_replaced": images_replaced,
+            "warnings": report_warnings,
         }
 
         # [12] Generation completed
@@ -565,10 +578,12 @@ def generate_full_report(
             "download_url": f"{backend_base_url}/api/v1/reports/{report_id}/download",
             "pdf_download_url": None,
             "preview_sections": preview_sections,
-            "status": "completed",
-            "state": "COMPLETED",
+            "status": report_status,
+            "state": "COMPLETED_WITH_WARNINGS" if report_status == "completed_with_warnings" else "COMPLETED",
             "fields_replaced": job_result.get("fields_replaced", 0),
-            "images_replaced": job_result.get("images_replaced", 0),
+            "images_replaced": images_replaced,
+            "warnings": report_warnings,
+            "warning_message": "; ".join(report_warnings) if report_warnings else None,
         }
     except Exception as e:
         logger.error(f"FAILED AT STAGE: [{current_stage}] - Error: {e}")

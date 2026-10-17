@@ -350,19 +350,34 @@ export function ReportGenerator({ projectId }: ReportGeneratorProps) {
 
           {/* Replacement Result Presentation */}
           {replacementJob && (
-            <div className="p-4 rounded-xl border border-emerald-200 bg-emerald-50/50 space-y-3 animate-in zoom-in-95 duration-200">
+            <div className={`p-4 rounded-xl border ${
+              (replacementJob.images_replaced === 0 || (replacementJob.warnings && replacementJob.warnings.length > 0))
+                ? "border-amber-300 bg-amber-50/70"
+                : "border-emerald-200 bg-emerald-50/50"
+            } space-y-3 animate-in zoom-in-95 duration-200`}>
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                 <div className="flex items-center space-x-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold text-sm">
-                    ✓
+                  <div className={`w-8 h-8 rounded-lg ${
+                    (replacementJob.images_replaced === 0 || (replacementJob.warnings && replacementJob.warnings.length > 0))
+                      ? "bg-amber-600 text-white"
+                      : "bg-emerald-600 text-white"
+                  } flex items-center justify-center font-bold text-sm`}>
+                    {(replacementJob.images_replaced === 0 || (replacementJob.warnings && replacementJob.warnings.length > 0)) ? "!" : "✓"}
                   </div>
                   <div>
                     <h4 className="text-sm font-bold text-slate-900">
-                      College Report Generated via In-Place Template Replacement
+                      {(replacementJob.images_replaced === 0 || (replacementJob.warnings && replacementJob.warnings.length > 0))
+                        ? "College Report Generated (Completed with Warnings)"
+                        : "College Report Generated via In-Place Template Replacement"}
                     </h4>
                     <p className="text-xs text-slate-600">
                       {replacementJob.fields_replaced} fields & {replacementJob.images_replaced} images replaced • College layout, fonts, colors, and margins strictly preserved.
                     </p>
+                    {replacementJob.images_replaced === 0 && (
+                      <p className="text-xs font-medium text-amber-800 mt-1">
+                        Notice: 0 new images were replaced (external provider quota/fallback). Original template figures and layout were strictly preserved.
+                      </p>
+                    )}
                   </div>
                 </div>
 

@@ -613,6 +613,9 @@ export default function ArmWorkspacePage() {
     const fileName = generatedData.file_name || `Report_${reportId}.docx`;
     const fileSize = generatedData.file_size_bytes || 41192;
 
+    const imagesReplaced = typeof generatedData.images_replaced === "number" ? generatedData.images_replaced : 0;
+    const isWarningReport = generatedData.status === "completed_with_warnings" || imagesReplaced === 0 || (generatedData.warnings && generatedData.warnings.length > 0);
+
     const generatedDoc: GeneratedDocument = {
       id: reportId,
       title: generatedData.title || projectTitle,
@@ -623,7 +626,7 @@ export default function ArmWorkspacePage() {
       pdfAvailable: false,
       pdfDownloadUrl: undefined,
       creationStatus: "generated",
-      validationStatus: "passed",
+      validationStatus: isWarningReport ? "warnings" : "passed",
       createdAt: new Date().toISOString(),
       sectionCount: generatedData.preview_sections?.length || activeDesign?.chapters_structure?.length || 13,
       sections: generatedData.preview_sections,
@@ -636,7 +639,18 @@ export default function ArmWorkspacePage() {
 
     const finalTitle = generatedData.title || projectTitle;
     const instDisplay = activeDesign?.institution?.name || "your institution";
-    const assistantContent = `ARM has completed researching and synthesizing your academic report on **"${finalTitle}"** using Gemini AI.\n\nFollowing your uploaded template design (Canva-style text and image replacement):\n• **Template Structure & Styling**: 100% preserved from your uploaded template (${instDisplay}, official emblem logo, headings, and formatting).\n• **Matter & Research**: Replaced with comprehensive academic text specifically for "${finalTitle}".\n• **Technical Diagrams**: High-resolution figures generated specifically for "${finalTitle}".\n\nYour finalized document is ready for download in Word (.docx) format:`;
+
+    let diagramsBullet = `• **Technical Diagrams**: High-resolution figures generated specifically for "${finalTitle}".`;
+    if (imagesReplaced === 0) {
+      diagramsBullet = `• **Visual Assets**: 0 replacement images generated (external providers unavailable or quota exhausted); original template figures and layout strictly preserved as fallback.`;
+    }
+
+    let warningPrefix = "";
+    if (isWarningReport && imagesReplaced === 0) {
+      warningPrefix = `⚠️ **Notice (Completed with Warnings)**: 0 new images were replaced. Full academic text and template design were successfully synthesized.\n\n`;
+    }
+
+    const assistantContent = `${warningPrefix}ARM has completed researching and synthesizing your academic report on **"${finalTitle}"** using Gemini AI.\n\nFollowing your uploaded template design (Canva-style text and image replacement):\n• **Template Structure & Styling**: 100% preserved from your uploaded template (${instDisplay}, official emblem logo, headings, and formatting).\n• **Matter & Research**: Replaced with comprehensive academic text specifically for "${finalTitle}".\n${diagramsBullet}\n\nYour finalized document is ready for download in Word (.docx) format:`;
 
     const assistantMsg: WorkspaceMessage = {
       id: Math.random().toString(36).substring(2, 9),

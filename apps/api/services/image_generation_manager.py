@@ -381,6 +381,28 @@ class ImageGenerationManager:
             sha256_val: str,
             metadata: Dict[str, Any],
         ) -> Optional[ImageGenerationResponse]:
+            if not img_bytes or len(img_bytes) < 100:
+                logger.warning(
+                    f"[ARM IMAGE MANAGER] Provider {provider_name} returned payload too small ({len(img_bytes) if img_bytes else 0} bytes)."
+                )
+                return None
+
+            try:
+                with PILImage.open(io.BytesIO(img_bytes)) as pil_img:
+                    pil_img.verify()
+                with PILImage.open(io.BytesIO(img_bytes)) as pil_img:
+                    actual_w, actual_h = pil_img.size
+                    if actual_w < 64 or actual_h < 64:
+                        logger.warning(
+                            f"[ARM IMAGE MANAGER] Provider {provider_name} returned image dimensions ({actual_w}x{actual_h}) below 64x64 minimum."
+                        )
+                        return None
+                    if not width or not height:
+                        width, height = actual_w, actual_h
+            except Exception as pe:
+                logger.warning(f"[ARM IMAGE MANAGER] Provider {provider_name} returned corrupt or unverifiable image: {pe}")
+                return None
+
             is_dup, dup_reason = self._is_image_duplicate_in_report(
                 report_id=request.report_id,
                 slide_number=request.slide_number,

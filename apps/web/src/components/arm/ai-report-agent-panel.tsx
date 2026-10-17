@@ -309,14 +309,25 @@ export function AiReportAgentPanel({
               </div>
               <div>
                 <h4 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
-                  College Report Successfully Compiled
-                  <Badge variant="outline" className="text-[10px] font-mono border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
-                    Source of Truth Preserved
+                  {replacementResult.images_replaced === 0 || (replacementResult.warnings && replacementResult.warnings.length > 0)
+                    ? "College Report Compiled (Completed with Warnings)"
+                    : "College Report Successfully Compiled"}
+                  <Badge variant="outline" className={`text-[10px] font-mono ${
+                    replacementResult.images_replaced === 0 || (replacementResult.warnings && replacementResult.warnings.length > 0)
+                      ? "border-amber-500/30 text-amber-600 dark:text-amber-400"
+                      : "border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
+                  }`}>
+                    {replacementResult.images_replaced === 0 ? "Visual Fallback Preserved" : "Source of Truth Preserved"}
                   </Badge>
                 </h4>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
                   {replacementResult.fields_replaced} of {replacementResult.total_fields} fields & {replacementResult.images_replaced} images replaced directly in college template
                 </p>
+                {replacementResult.images_replaced === 0 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                    Notice: 0 new images were replaced (external provider quota/fallback). Original template visuals and figures were strictly preserved.
+                  </p>
+                )}
               </div>
             </div>
 
@@ -344,7 +355,7 @@ export function AiReportAgentPanel({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
             <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800">
               <span className="text-zinc-400 block text-[10px]">Processing State</span>
-              <span className="text-emerald-600 dark:text-emerald-400 font-bold">{replacementResult.state}</span>
+              <span className={replacementResult.state.includes("WARNING") ? "text-amber-600 dark:text-amber-400 font-bold" : "text-emerald-600 dark:text-emerald-400 font-bold"}>{replacementResult.state}</span>
             </div>
             <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800">
               <span className="text-zinc-400 block text-[10px]">Typography & Layout</span>
@@ -352,7 +363,9 @@ export function AiReportAgentPanel({
             </div>
             <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800">
               <span className="text-zinc-400 block text-[10px]">Images Replaced</span>
-              <span className="text-blue-600 dark:text-blue-400 font-bold">{replacementResult.images_replaced} embedded</span>
+              <span className={replacementResult.images_replaced === 0 ? "text-amber-600 dark:text-amber-400 font-bold" : "text-blue-600 dark:text-blue-400 font-bold"}>
+                {replacementResult.images_replaced === 0 ? "0 embedded (template preserved)" : `${replacementResult.images_replaced} embedded`}
+              </span>
             </div>
             <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800">
               <span className="text-zinc-400 block text-[10px]">Approval Status</span>

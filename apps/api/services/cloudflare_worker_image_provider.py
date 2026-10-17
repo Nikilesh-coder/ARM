@@ -107,9 +107,32 @@ class CloudflareWorkerImageProvider:
         }
         payload = {"prompt": clean_prompt}
 
-        try:
-            with httpx.Client(timeout=timeout) as client:
-                resp = client.post(worker_url, json=payload, headers=headers)
+        max_retries = 2
+        resp = None
+        for attempt in range(max_retries + 1):
+            try:
+                with httpx.Client(timeout=timeout) as client:
+                    resp = client.post(worker_url, json=payload, headers=headers)
+            except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.NetworkError) as net_err:
+                if attempt < max_retries:
+                    backoff = 1.5 * (2 ** attempt)
+                    logger.warning(f"[CF WORKER] Transient network error (attempt {attempt+1}/{max_retries+1}): {net_err}. Retrying in {backoff:.1f}s...")
+                    time.sleep(backoff)
+                    continue
+                else:
+                    logger.warning(f"[CF WORKER] Connection failed after {max_retries+1} attempts: {net_err}")
+                    image_provider_health_manager.record_failure(
+                        cls.PROVIDER_NAME,
+                        reason=f"Network error after retries: {str(net_err)[:100]}",
+                    )
+                    return None
+            except Exception as e:
+                logger.warning(f"[CF WORKER] Non-retryable error: {e}")
+                image_provider_health_manager.record_failure(
+                    cls.PROVIDER_NAME,
+                    reason=f"Fatal error: {str(e)[:100]}",
+                )
+                return None
 
             status_code = resp.status_code
             content_type = resp.headers.get("content-type", "").lower()
@@ -128,11 +151,12 @@ class CloudflareWorkerImageProvider:
                 if is_image_data and len(raw_bytes) > 100:
                     try:
                         with PILImage.open(io.BytesIO(raw_bytes)) as pil_img:
-                            # Verify valid image integrity
                             pil_img.verify()
 
-                        # Re-open for conversion (verify invalidates the buffer)
                         with PILImage.open(io.BytesIO(raw_bytes)) as pil_img:
+                            if pil_img.width < 64 or pil_img.height < 64:
+                                logger.warning(f"[CF WORKER] Dimensions too small ({pil_img.size}).")
+                                return None
                             buf = io.BytesIO()
                             pil_img.convert("RGB").save(buf, format="PNG")
                             png_bytes = buf.getvalue()
@@ -168,7 +192,7 @@ class CloudflareWorkerImageProvider:
                     )
                     return None
 
-            # Handle quota / neuron limit exhaustion (4006)
+            # Handle quota / neuron limit exhaustion (4006) - do not retry
             resp_text = resp.text.lower() if resp.text else ""
             if "4006" in resp_text or "allocation" in resp_text or "quota" in resp_text:
                 logger.warning("Cloudflare Worker quota exhausted — using fallback")
@@ -180,47 +204,42 @@ class CloudflareWorkerImageProvider:
                 )
                 return None
 
-            # Handle Authentication failure (401)
-            if status_code == 401:
-                logger.warning("Cloudflare Worker unavailable — using RTX fallback")
+            # Handle Authentication failure (401) - do not retry
+            if status_code in (401, 403):
+                logger.warning("Cloudflare Worker authentication failed — using fallback")
                 image_provider_health_manager.record_failure(
                     cls.PROVIDER_NAME,
-                    reason="Cloudflare Worker authentication failed (401)",
-                    status_code=401,
+                    reason=f"Cloudflare Worker auth failed ({status_code})",
+                    status_code=status_code,
                 )
                 return None
 
-            # Handle Rate limiting (429)
-            if status_code == 429:
-                logger.warning("Cloudflare Worker unavailable — using RTX fallback")
-                image_provider_health_manager.record_failure(
-                    cls.PROVIDER_NAME,
-                    reason="Cloudflare Worker rate limited (429)",
-                    status_code=429,
-                )
-                return None
+            # Handle Rate limiting (429) - retry if Retry-After is small
+            if status_code == 429 and attempt < max_retries:
+                retry_after_hdr = resp.headers.get("Retry-After")
+                try:
+                    retry_wait = float(retry_after_hdr) if retry_after_hdr else (2.0 * (attempt + 1))
+                except (ValueError, TypeError):
+                    retry_wait = 2.0 * (attempt + 1)
+                if retry_wait <= 10.0:
+                    logger.warning(f"[CF WORKER] Rate limited (429). Waiting {retry_wait:.1f}s before retry...")
+                    time.sleep(retry_wait)
+                    continue
 
-            # Other server or client errors
-            logger.warning(f"Cloudflare Worker unavailable — using RTX fallback (HTTP {status_code})")
+            # Transient 5xx server error - retry with backoff
+            if 500 <= status_code < 600 and attempt < max_retries:
+                backoff = 2.0 * (attempt + 1)
+                logger.warning(f"[CF WORKER] Server error {status_code}. Retrying in {backoff:.1f}s...")
+                time.sleep(backoff)
+                continue
+
+            # Non-retryable error
+            logger.warning(f"Cloudflare Worker unavailable (HTTP {status_code})")
             image_provider_health_manager.record_failure(
                 cls.PROVIDER_NAME,
                 reason=f"HTTP {status_code}",
                 status_code=status_code,
             )
-
-        except httpx.TimeoutException:
-            logger.warning("Cloudflare Worker unavailable — using RTX fallback (Timeout)")
-            image_provider_health_manager.record_failure(
-                cls.PROVIDER_NAME,
-                reason="Request timed out",
-                status_code=504,
-            )
-        except Exception as ex:
-            logger.warning(f"Cloudflare Worker unavailable — using RTX fallback ({type(ex).__name__})")
-            image_provider_health_manager.record_failure(
-                cls.PROVIDER_NAME,
-                reason=f"Connection error: {type(ex).__name__}",
-                status_code=500,
-            )
+            return None
 
         return None

@@ -19,6 +19,7 @@ Performs comprehensive post-generation validation on the generated DOCX report:
 """
 
 import os
+import sys
 import io
 import re
 import json
@@ -154,6 +155,7 @@ class VisualReportValidator:
             "project_title": clean_title,
             "docx_path": docx_path,
             "pdf_path": pdf_path,
+            "pdf_validation_available": bool(converted and pdf_path and os.path.exists(pdf_path)),
             "total_pages": len(slides_audited) if slides_audited else ooxml_audit.get("total_slides", 1),
             "media_audit": media_audit,
             "title_verified": ooxml_audit.get("title_found", False),
@@ -266,18 +268,45 @@ class VisualReportValidator:
     @classmethod
     def _convert_docx_to_pdf_word(cls, docx_path: str, pdf_path: str) -> bool:
         """
-        Invokes Microsoft Word via PowerShell COM to convert DOCX to PDF.
+        Invokes Microsoft Word via PowerShell COM to convert DOCX to PDF on Windows,
+        or uses headless LibreOffice if available on Linux, or marks check unavailable.
         """
-        abs_docx = os.path.abspath(docx_path).replace("'", "''")
-        abs_pdf = os.path.abspath(pdf_path).replace("'", "''")
+        abs_docx = os.path.abspath(docx_path)
+        abs_pdf = os.path.abspath(pdf_path)
+
+        # Linux / non-Windows or environments without PowerShell Word COM
+        if sys.platform != "win32" or not shutil.which("powershell"):
+            # Check for alternative headless converters (e.g. libreoffice/soffice)
+            soffice_bin = shutil.which("soffice") or shutil.which("libreoffice")
+            if soffice_bin:
+                try:
+                    out_dir = os.path.dirname(abs_pdf)
+                    res = subprocess.run(
+                        [soffice_bin, "--headless", "--convert-to", "pdf", abs_docx, "--outdir", out_dir],
+                        capture_output=True,
+                        text=True,
+                        timeout=45,
+                    )
+                    expected_pdf = os.path.join(out_dir, f"{os.path.splitext(os.path.basename(abs_docx))[0]}.pdf")
+                    if os.path.exists(expected_pdf):
+                        if expected_pdf != abs_pdf:
+                            shutil.move(expected_pdf, abs_pdf)
+                        return True
+                except Exception as e:
+                    logger.warning(f"Headless LibreOffice conversion exception: {e}")
+            logger.info("Word COM/PowerShell validation is unavailable on this platform (Linux/Render without Word COM). Skipping PDF visual inspection.")
+            return False
+
+        abs_docx_esc = abs_docx.replace("'", "''")
+        abs_pdf_esc = abs_pdf.replace("'", "''")
 
         ps_script = f"""
 $ErrorActionPreference = 'Stop'
 $word = New-Object -ComObject Word.Application
 $word.Visible = $false
 try {{
-    $doc = $word.Documents.Open('{abs_docx}')
-    $doc.SaveAs([ref]'{abs_pdf}', [ref]17)
+    $doc = $word.Documents.Open('{abs_docx_esc}')
+    $doc.SaveAs([ref]'{abs_pdf_esc}', [ref]17)
     $doc.Close()
 }} finally {{
     $word.Quit()

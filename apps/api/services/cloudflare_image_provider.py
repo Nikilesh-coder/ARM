@@ -73,40 +73,91 @@ class CloudflareDirectImageProvider:
 
         logger.info(f"[CF DIRECT] Initiating direct Cloudflare Workers AI generation via {model}...")
 
-        try:
-            with httpx.Client(timeout=timeout) as client:
-                resp = client.post(url, headers=headers, json=payload)
+        max_retries = 2
+        resp = None
+        for attempt in range(max_retries + 1):
+            try:
+                with httpx.Client(timeout=timeout) as client:
+                    resp = client.post(url, headers=headers, json=payload)
+            except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.NetworkError) as net_err:
+                if attempt < max_retries:
+                    backoff = 1.5 * (2 ** attempt)
+                    logger.warning(f"[CF DIRECT] Transient network error (attempt {attempt+1}/{max_retries+1}): {net_err}. Retrying in {backoff:.1f}s...")
+                    time.sleep(backoff)
+                    continue
+                else:
+                    logger.warning(f"[CF DIRECT] Generation exception after retries: {net_err}")
+                    image_provider_health_manager.record_failure(
+                        cls.PROVIDER_NAME,
+                        reason=f"Network error after retries: {str(net_err)[:100]}",
+                    )
+                    return None
+            except Exception as e:
+                logger.warning(f"[CF DIRECT] Non-retryable exception: {e}")
+                image_provider_health_manager.record_failure(
+                    cls.PROVIDER_NAME,
+                    reason=f"Fatal error: {str(e)[:100]}",
+                )
+                return None
 
             if resp.status_code == 200:
                 data = resp.json()
                 img_data = data.get("result", {})
                 b64_str = img_data.get("image") if isinstance(img_data, dict) else None
                 if b64_str:
-                    raw_bytes = base64.b64decode(b64_str)
-                    with PILImage.open(io.BytesIO(raw_bytes)) as pil_img:
-                        pil_img.verify()
-                    with PILImage.open(io.BytesIO(raw_bytes)) as pil_img:
-                        buf = io.BytesIO()
-                        pil_img.convert("RGB").save(buf, format="PNG")
-                        png_bytes = buf.getvalue()
-                        dims = pil_img.size
-                        img_sha = hashlib.sha256(png_bytes).hexdigest()
+                    try:
+                        raw_bytes = base64.b64decode(b64_str)
+                        with PILImage.open(io.BytesIO(raw_bytes)) as pil_img:
+                            pil_img.verify()
+                        with PILImage.open(io.BytesIO(raw_bytes)) as pil_img:
+                            if pil_img.width < 64 or pil_img.height < 64:
+                                logger.warning(f"[CF DIRECT] Dimensions too small ({pil_img.size}).")
+                                return None
+                            buf = io.BytesIO()
+                            pil_img.convert("RGB").save(buf, format="PNG")
+                            png_bytes = buf.getvalue()
+                            dims = pil_img.size
+                            img_sha = hashlib.sha256(png_bytes).hexdigest()
 
-                    image_provider_health_manager.record_success(cls.PROVIDER_NAME)
-                    logger.info(f"[CF DIRECT] Direct Cloudflare AI generation succeeded ({dims[0]}x{dims[1]}).")
-                    return CloudflareWorkerImageGenerationResult(
-                        provider_name="cloudflare-direct",
-                        model_name=model,
-                        http_status="200 OK",
-                        response_type="image/png",
-                        image_bytes=png_bytes,
-                        dimensions=dims,
-                        sha256=img_sha,
-                    )
+                        image_provider_health_manager.record_success(cls.PROVIDER_NAME)
+                        logger.info(f"[CF DIRECT] Direct Cloudflare AI generation succeeded ({dims[0]}x{dims[1]}).")
+                        return CloudflareWorkerImageGenerationResult(
+                            provider_name="cloudflare-direct",
+                            model_name=model,
+                            http_status="200 OK",
+                            response_type="image/png",
+                            image_bytes=png_bytes,
+                            dimensions=dims,
+                            sha256=img_sha,
+                        )
+                    except Exception as verify_err:
+                        logger.warning(f"[CF DIRECT] Corrupt image data: {verify_err}")
+                        image_provider_health_manager.record_failure(cls.PROVIDER_NAME, reason="Corrupt image data", status_code=502)
+                        return None
 
             status_code = resp.status_code
             err_text = resp.text[:150] if resp.text else ""
             is_quota = status_code in (402, 429) or "quota" in err_text.lower() or "limit" in err_text.lower()
+
+            # Retry on 429 if Retry-After is small
+            if status_code == 429 and attempt < max_retries:
+                retry_after_hdr = resp.headers.get("Retry-After")
+                try:
+                    retry_wait = float(retry_after_hdr) if retry_after_hdr else (2.0 * (attempt + 1))
+                except (ValueError, TypeError):
+                    retry_wait = 2.0 * (attempt + 1)
+                if retry_wait <= 10.0:
+                    logger.warning(f"[CF DIRECT] Rate limited (429). Waiting {retry_wait:.1f}s before retry...")
+                    time.sleep(retry_wait)
+                    continue
+
+            # Retry on transient 5xx
+            if 500 <= status_code < 600 and attempt < max_retries:
+                backoff = 2.0 * (attempt + 1)
+                logger.warning(f"[CF DIRECT] Server error {status_code}. Retrying in {backoff:.1f}s...")
+                time.sleep(backoff)
+                continue
+
             reason = f"Cloudflare Direct HTTP {status_code}: {err_text}"
             logger.warning(f"[CF DIRECT] {reason}")
             image_provider_health_manager.record_failure(
@@ -114,13 +165,6 @@ class CloudflareDirectImageProvider:
                 reason=reason,
                 status_code=status_code,
                 is_exhausted=is_quota,
-            )
-            return None
-        except Exception as e:
-            logger.warning(f"[CF DIRECT] Generation exception: {e}")
-            image_provider_health_manager.record_failure(
-                cls.PROVIDER_NAME,
-                reason=f"Exception: {e}",
             )
             return None
 

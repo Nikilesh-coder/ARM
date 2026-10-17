@@ -1163,27 +1163,39 @@ class ReplacementEngineService:
         # - Requested new images were actually generated & inserted.
         # - If any check fails, FAIL THE REPORT instead of returning unchanged template.
         num_requested_images = len(images_to_generate) if ("images_to_generate" in locals() and images_to_generate) else 0
+        has_mandatory_image = any(im.get("mandatory") is True for im in images_to_generate) if ("images_to_generate" in locals() and images_to_generate) else False
         if num_requested_images > 0 and len(synth_map) == 0 and job_record.get("images_replaced", 0) == 0:
             from apps.api.services.image_generation_manager import image_generation_manager
             diags = image_generation_manager.get_last_diagnostics()
             diag_str = "; ".join(diags) if diags else "Image providers failed or quota exhausted"
-            err_msg = (
-                f"Image replacement validation failed: {num_requested_images} replacement images were requested, "
-                f"but 0 new images were successfully generated or replaced into the template. "
-                f"Provider diagnostics: [{diag_str}]. Aborting report to prevent returning unchanged template."
-            )
-            logger.error(f"[{job_id}] {err_msg}")
-            report_file_storage_service.record_failed_generation(
-                report_id=job_id,
-                reason=err_msg,
-                metadata={"project_id": project_id, "template_id": template_id}
-            )
-            job_record["state"] = ReplacementState.FAILED.value
-            job_record["arm_ui_state"] = "thinking"
-            job_record["status_message"] = err_msg
-            job_record["errors"] = [{"field": "image_generation", "reason": err_msg}]
-            job_record["updated_at"] = datetime.now(timezone.utc).isoformat()
-            return job_record
+            if has_mandatory_image:
+                err_msg = (
+                    f"Mandatory image replacement validation failed: {num_requested_images} replacement images were requested (mandatory), "
+                    f"but 0 new images were successfully generated or replaced into the template. "
+                    f"Provider diagnostics: [{diag_str}]. Aborting report to prevent returning unchanged template."
+                )
+                logger.error(f"[{job_id}] {err_msg}")
+                report_file_storage_service.record_failed_generation(
+                    report_id=job_id,
+                    reason=err_msg,
+                    metadata={"project_id": project_id, "template_id": template_id}
+                )
+                job_record["state"] = ReplacementState.FAILED.value
+                job_record["arm_ui_state"] = "thinking"
+                job_record["status_message"] = err_msg
+                job_record["errors"] = [{"field": "image_generation", "reason": err_msg}]
+                job_record["updated_at"] = datetime.now(timezone.utc).isoformat()
+                return job_record
+            else:
+                warn_msg = (
+                    f"Optional image generation unavailable ({diag_str}); "
+                    f"completed report with synthesized text and preserved original template visuals."
+                )
+                logger.warning(f"[{job_id}] {warn_msg}")
+                if "warnings" not in job_record or job_record["warnings"] is None:
+                    job_record["warnings"] = []
+                job_record["warnings"].append(warn_msg)
+                job_record["images_replaced"] = 0
 
         # Atomically move from staging to canonical persistent reports directory
         canonical_path, storage_key = report_file_storage_service.save_report_file_atomically(

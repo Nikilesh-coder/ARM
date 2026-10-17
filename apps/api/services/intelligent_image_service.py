@@ -300,6 +300,19 @@ class IntelligentImageService:
                 project_description=clean_prob,
             )
 
+            # Pre-check: If slide is explicitly classified as NONE (e.g. academic references, bibliography, acknowledgements), skip synthesis
+            pre_category, pre_reason = visual_engine.decide_visual_category(
+                slide_heading=heading,
+                slide_matter=slide_matter,
+                detected_domain=domain,
+                slide_number=slide_idx or 1,
+            )
+            if pre_category == "none":
+                logger.info(
+                    f"[ARM VISUAL ENGINE] Slide {slide_idx} ('{heading}') explicitly classified as NONE ({pre_reason}). Skipping image synthesis."
+                )
+                continue
+
             if ar < 1.0:
                 target_w = 1200
                 target_h = max(1200, int(round(target_w / max(0.2, ar))))
@@ -393,6 +406,10 @@ class IntelligentImageService:
                 if img.get("rel_id"):
                     replacements[img["rel_id"]] = item_info
                 replacements[slot_id] = item_info
+            elif vis_res.visual_type == "none":
+                logger.info(
+                    f"[ARM VISUAL ENGINE] Slide {slide_idx} ('{heading}') resolved to NONE ({vis_res.reason}). Skipping image synthesis."
+                )
             else:
                 logger.warning(
                     f"[ARM VISUAL ENGINE] Visual synthesis failed or not returned for slide {slide_idx} "
