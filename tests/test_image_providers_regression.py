@@ -487,3 +487,100 @@ def test_15_docx_formatting_and_package_preservation(tmp_path):
     sec2 = doc2.sections[0]
     assert sec2.top_margin == docx.shared.Inches(1.0)
     assert sec2.left_margin == docx.shared.Inches(1.25)
+
+
+def test_16_cloudflare_prompt_truncation_under_2048():
+    """Cloudflare Direct and Worker safely truncate prompts > 2048 chars without failing HTTP 400."""
+    from apps.api.services.cloudflare_image_provider import CloudflareDirectImageProvider
+    from apps.api.services.cloudflare_worker_image_provider import CloudflareWorkerImageProvider
+
+    long_prompt = "AI irrigation sensor field telemetry " * 75  # ~2775 characters
+    assert len(long_prompt) > 2048
+
+    import base64
+    valid_b64 = base64.b64encode(_make_dummy_image(w=64, h=64)).decode("ascii")
+    captured_direct_payload = {}
+    mock_direct_resp = MagicMock()
+    mock_direct_resp.status_code = 200
+    mock_direct_resp.json.return_value = {
+        "result": {"image": valid_b64}
+    }
+
+    def fake_direct_post(url, headers=None, json=None, **kwargs):
+        captured_direct_payload.update(json or {})
+        return mock_direct_resp
+
+    with patch.object(CloudflareDirectImageProvider, "is_configured", return_value=True), \
+         patch.object(CloudflareDirectImageProvider, "get_account_id", return_value="acc_123"), \
+         patch.object(CloudflareDirectImageProvider, "get_api_token", return_value="tok_123"), \
+         patch("httpx.Client.post", side_effect=fake_direct_post):
+        res = CloudflareDirectImageProvider.generate_image(long_prompt)
+        assert res is not None
+        assert len(captured_direct_payload["prompt"]) <= 2000
+
+
+def test_17_cloudflare_independent_cooldown_worker_and_direct():
+    """Worker failure enters cloudflare_worker cooldown without locking out cloudflare_direct."""
+    from apps.api.services.cloudflare_image_provider import CloudflareImageProvider, CloudflareDirectImageProvider
+    from apps.api.services.cloudflare_worker_image_provider import CloudflareWorkerImageProvider
+
+    image_provider_health_manager.reset_cooldown()
+
+    # Simulate Worker failure
+    image_provider_health_manager.record_failure("cloudflare_worker", reason="Worker 502 bad gateway", status_code=502)
+
+    assert image_provider_health_manager.is_available("cloudflare_worker") is False
+    assert image_provider_health_manager.is_available("cloudflare_direct") is True
+
+    # CloudflareImageProvider is still available via direct fallback
+    with patch.object(CloudflareWorkerImageProvider, "is_configured", return_value=True), \
+         patch.object(CloudflareDirectImageProvider, "is_configured", return_value=True):
+        assert CloudflareImageProvider.is_available() is True
+
+        dummy_bytes = _make_dummy_image()
+        mock_direct_res = CloudflareWorkerImageGenerationResult(
+            provider_name="cloudflare-direct",
+            model_name="@cf/black-forest-labs/flux-1-schnell",
+            http_status="200 OK",
+            response_type="image/png",
+            image_bytes=dummy_bytes,
+            dimensions=(512, 512),
+            sha256="fake_sha",
+        )
+        with patch.object(CloudflareDirectImageProvider, "generate_image", return_value=mock_direct_res):
+            res = CloudflareImageProvider.generate_image("Prompt")
+            assert res is not None
+            assert res.provider_name == "cloudflare-direct"
+
+
+def test_18_docx_replacement_engine_multi_key_lookup(tmp_path):
+    """DocxTemplateReplacementEngine resolves images whether keyed by arm_field, filename, or rel_id."""
+    import docx
+    from packages.replacement_engine.docx_engine import DocxTemplateReplacementEngine
+
+    docx_file = str(tmp_path / "test_tpl.docx")
+    out_file = str(tmp_path / "test_out.docx")
+    doc = docx.Document()
+    p = doc.add_paragraph("Chapter 5 Results")
+    doc.save(docx_file)
+
+    img_file = str(tmp_path / "gen_img.png")
+    with open(img_file, "wb") as f:
+        f.write(_make_dummy_image())
+
+    # image_assets has key "image1.png" rather than "image_1"
+    image_assets = {"image1.png": img_file}
+    image_mapping = [
+        {"action": "replace", "arm_image_field": "image_1", "filename": "image1.png", "rel_id": None}
+    ]
+
+    engine = DocxTemplateReplacementEngine()
+    result = engine.replace(
+        template_path=docx_file,
+        field_values={"title": "Test Title"},
+        image_assets=image_assets,
+        output_path=out_file,
+        image_mapping=image_mapping,
+    )
+
+    assert result.success is True

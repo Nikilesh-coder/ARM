@@ -67,7 +67,15 @@ class XKiroImageProvider:
 
     @classmethod
     def get_api_key(cls) -> Optional[str]:
-        return os.getenv("XKIRO_API_KEY") or os.getenv("SUPERNOVA_API_KEY")
+        if "XKIRO_API_KEY" in os.environ or "SUPERNOVA_API_KEY" in os.environ:
+            val = (os.getenv("XKIRO_API_KEY") or os.getenv("SUPERNOVA_API_KEY") or "").strip()
+            return val or None
+        try:
+            from apps.api.core.config import settings
+            val = getattr(settings.image_provider, "xkiro_api_key", None)
+            return val.strip() if val else None
+        except Exception:
+            return None
 
     @classmethod
     def get_base_url(cls) -> str:
@@ -76,7 +84,14 @@ class XKiroImageProvider:
 
     @classmethod
     def get_model_name(cls) -> str:
-        return (os.getenv("XKIRO_MODEL") or os.getenv("SUPERNOVA_MODEL", DEFAULT_XKIRO_MODEL)).strip()
+        val = os.getenv("XKIRO_MODEL") or os.getenv("SUPERNOVA_MODEL")
+        if not val:
+            try:
+                from apps.api.core.config import settings
+                val = getattr(settings.image_provider, "xkiro_model", None)
+            except Exception:
+                pass
+        return (val or DEFAULT_XKIRO_MODEL).strip()
 
     @classmethod
     def is_free_only(cls) -> bool:

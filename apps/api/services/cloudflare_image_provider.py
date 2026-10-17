@@ -8,6 +8,7 @@ Provides support for:
 
 import os
 import io
+import time
 import base64
 import hashlib
 import logging
@@ -29,19 +30,40 @@ DEFAULT_CF_IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell"
 class CloudflareDirectImageProvider:
     """Direct Cloudflare Workers AI text-to-image provider using Account ID and API Token."""
 
-    PROVIDER_NAME = "cloudflare"
+    PROVIDER_NAME = "cloudflare_direct"
 
     @classmethod
     def get_account_id(cls) -> Optional[str]:
-        return os.getenv("CLOUDFLARE_ACCOUNT_ID")
+        val = os.getenv("CLOUDFLARE_ACCOUNT_ID")
+        if not val:
+            try:
+                from apps.api.core.config import settings
+                val = getattr(settings.image_provider, "cloudflare_account_id", None)
+            except Exception:
+                pass
+        return val
 
     @classmethod
     def get_api_token(cls) -> Optional[str]:
-        return os.getenv("CLOUDFLARE_API_TOKEN")
+        val = os.getenv("CLOUDFLARE_API_TOKEN")
+        if not val:
+            try:
+                from apps.api.core.config import settings
+                val = getattr(settings.image_provider, "cloudflare_api_token", None)
+            except Exception:
+                pass
+        return val
 
     @classmethod
     def get_model(cls) -> str:
-        return os.getenv("CLOUDFLARE_IMAGE_MODEL", DEFAULT_CF_IMAGE_MODEL).strip()
+        val = os.getenv("CLOUDFLARE_IMAGE_MODEL")
+        if not val:
+            try:
+                from apps.api.core.config import settings
+                val = getattr(settings.image_provider, "cloudflare_image_model", None)
+            except Exception:
+                pass
+        return (val or DEFAULT_CF_IMAGE_MODEL).strip()
 
     @classmethod
     def is_configured(cls) -> bool:
@@ -64,12 +86,28 @@ class CloudflareDirectImageProvider:
         token = cls.get_api_token().strip()
         model = cls.get_model()
 
+        clean_prompt = prompt.strip() if prompt else ""
+        if not clean_prompt:
+            logger.warning("[CF DIRECT] Empty prompt provided. Skipping generation.")
+            return None
+
+        # Cloudflare Workers AI has a strict 2048-character prompt length limit.
+        # Truncate cleanly at a word boundary to prevent HTTP 400 Bad Input.
+        if len(clean_prompt) > 2000:
+            truncated = clean_prompt[:2000]
+            last_space = max(truncated.rfind(" "), truncated.rfind(","))
+            if last_space > 1900:
+                clean_prompt = truncated[:last_space].strip()
+            else:
+                clean_prompt = truncated.strip()
+            logger.info(f"[CF DIRECT] Prompt truncated to {len(clean_prompt)} chars to conform to Cloudflare <=2048 limit.")
+
         url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{model}"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
-        payload = {"prompt": prompt.strip()}
+        payload = {"prompt": clean_prompt}
 
         logger.info(f"[CF DIRECT] Initiating direct Cloudflare Workers AI generation via {model}...")
 
@@ -179,12 +217,28 @@ class CloudflareImageProvider:
         return CloudflareWorkerImageProvider.is_configured() or CloudflareDirectImageProvider.is_configured()
 
     @classmethod
+    def is_available(cls) -> bool:
+        worker_ok = CloudflareWorkerImageProvider.is_configured() and image_provider_health_manager.is_available("cloudflare_worker")
+        direct_ok = CloudflareDirectImageProvider.is_configured() and image_provider_health_manager.is_available("cloudflare_direct")
+        # Also check legacy "cloudflare" cooldown if recorded
+        legacy_ok = image_provider_health_manager.is_available("cloudflare")
+        return (worker_ok or direct_ok) and legacy_ok
+
+    @classmethod
     def generate_image(cls, prompt: str, timeout: float = 60.0) -> Optional[CloudflareWorkerImageGenerationResult]:
-        if CloudflareWorkerImageProvider.is_configured() and image_provider_health_manager.is_available("cloudflare"):
+        if (
+            CloudflareWorkerImageProvider.is_configured()
+            and image_provider_health_manager.is_available("cloudflare_worker")
+            and image_provider_health_manager.is_available("cloudflare")
+        ):
             res = CloudflareWorkerImageProvider.generate_image(prompt, timeout=timeout)
             if res:
                 return res
-        if CloudflareDirectImageProvider.is_configured() and image_provider_health_manager.is_available("cloudflare"):
+        if (
+            CloudflareDirectImageProvider.is_configured()
+            and image_provider_health_manager.is_available("cloudflare_direct")
+            and image_provider_health_manager.is_available("cloudflare")
+        ):
             return CloudflareDirectImageProvider.generate_image(prompt, timeout=timeout)
         return None
 

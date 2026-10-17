@@ -53,21 +53,55 @@ class CloudflareWorkerImageGenerationResult:
 class CloudflareWorkerImageProvider:
     """Primary image provider wrapping the deployed Cloudflare Worker."""
 
-    PROVIDER_NAME = "cloudflare"
+    PROVIDER_NAME = "cloudflare_worker"
 
     @classmethod
     def get_worker_url(cls) -> str:
-        return os.getenv("CLOUDFLARE_WORKER_URL", DEFAULT_WORKER_URL).strip()
+        val = os.getenv("CLOUDFLARE_WORKER_URL")
+        if not val:
+            try:
+                from apps.api.core.config import settings
+                val = getattr(settings.image_provider, "cloudflare_worker_url", None)
+            except Exception:
+                pass
+        return (val or DEFAULT_WORKER_URL).strip()
 
     @classmethod
     def get_worker_key(cls) -> Optional[str]:
-        return os.getenv("CLOUDFLARE_WORKER_API_KEY")
+        val = os.getenv("CLOUDFLARE_WORKER_API_KEY")
+        if not val:
+            try:
+                from apps.api.core.config import settings
+                val = getattr(settings.image_provider, "cloudflare_worker_api_key", None)
+            except Exception:
+                pass
+        return val
 
     @classmethod
     def is_configured(cls) -> bool:
         url = cls.get_worker_url()
         key = cls.get_worker_key()
         return bool(url and key and key.strip() not in ("", "placeholder", "undefined", "<WORKER_SECRET>"))
+
+    @classmethod
+    def _record_failure(cls, reason: str, status_code: Optional[int] = None, is_exhausted: bool = False):
+        image_provider_health_manager.record_failure(
+            cls.PROVIDER_NAME,
+            reason=reason,
+            status_code=status_code,
+            is_exhausted=is_exhausted,
+        )
+        image_provider_health_manager.record_failure(
+            "cloudflare",
+            reason=reason,
+            status_code=status_code,
+            is_exhausted=is_exhausted,
+        )
+
+    @classmethod
+    def _record_success(cls):
+        image_provider_health_manager.record_success(cls.PROVIDER_NAME)
+        image_provider_health_manager.record_success("cloudflare")
 
     @classmethod
     def generate_image(
@@ -98,6 +132,16 @@ class CloudflareWorkerImageProvider:
             logger.warning("[CF WORKER] Empty prompt provided. Skipping generation.")
             return None
 
+        # Bound prompt to safe character length for Cloudflare Workers AI
+        if len(clean_prompt) > 2000:
+            truncated = clean_prompt[:2000]
+            last_space = max(truncated.rfind(" "), truncated.rfind(","))
+            if last_space > 1900:
+                clean_prompt = truncated[:last_space].strip()
+            else:
+                clean_prompt = truncated.strip()
+            logger.info(f"[CF WORKER] Prompt truncated to {len(clean_prompt)} chars to protect Worker limits.")
+
         # Safe logging: strictly no secrets or auth tokens logged
         logger.info("Cloudflare Worker image generation started")
 
@@ -121,15 +165,13 @@ class CloudflareWorkerImageProvider:
                     continue
                 else:
                     logger.warning(f"[CF WORKER] Connection failed after {max_retries+1} attempts: {net_err}")
-                    image_provider_health_manager.record_failure(
-                        cls.PROVIDER_NAME,
+                    cls._record_failure(
                         reason=f"Network error after retries: {str(net_err)[:100]}",
                     )
                     return None
             except Exception as e:
                 logger.warning(f"[CF WORKER] Non-retryable error: {e}")
-                image_provider_health_manager.record_failure(
-                    cls.PROVIDER_NAME,
+                cls._record_failure(
                     reason=f"Fatal error: {str(e)[:100]}",
                 )
                 return None
@@ -163,7 +205,7 @@ class CloudflareWorkerImageProvider:
                             dims = pil_img.size
                             img_sha = hashlib.sha256(png_bytes).hexdigest()
 
-                        image_provider_health_manager.record_success(cls.PROVIDER_NAME)
+                        cls._record_success()
                         logger.info("Cloudflare Worker image generation succeeded")
 
                         return CloudflareWorkerImageGenerationResult(
@@ -177,16 +219,14 @@ class CloudflareWorkerImageProvider:
                         )
                     except Exception as verify_err:
                         logger.warning(f"[CF WORKER] Invalid image binary received: {verify_err}")
-                        image_provider_health_manager.record_failure(
-                            cls.PROVIDER_NAME,
+                        cls._record_failure(
                             reason="Corrupt image data received",
                             status_code=502,
                         )
                         return None
                 else:
                     logger.warning("[CF WORKER] Response was not valid image binary data.")
-                    image_provider_health_manager.record_failure(
-                        cls.PROVIDER_NAME,
+                    cls._record_failure(
                         reason="Non-image binary response",
                         status_code=502,
                     )
@@ -196,8 +236,7 @@ class CloudflareWorkerImageProvider:
             resp_text = resp.text.lower() if resp.text else ""
             if "4006" in resp_text or "allocation" in resp_text or "quota" in resp_text:
                 logger.warning("Cloudflare Worker quota exhausted — using fallback")
-                image_provider_health_manager.record_failure(
-                    cls.PROVIDER_NAME,
+                cls._record_failure(
                     reason="Cloudflare Worker quota exhausted (4006)",
                     status_code=status_code,
                     is_exhausted=True,
@@ -207,8 +246,7 @@ class CloudflareWorkerImageProvider:
             # Handle Authentication failure (401) - do not retry
             if status_code in (401, 403):
                 logger.warning("Cloudflare Worker authentication failed — using fallback")
-                image_provider_health_manager.record_failure(
-                    cls.PROVIDER_NAME,
+                cls._record_failure(
                     reason=f"Cloudflare Worker auth failed ({status_code})",
                     status_code=status_code,
                 )
@@ -235,8 +273,7 @@ class CloudflareWorkerImageProvider:
 
             # Non-retryable error
             logger.warning(f"Cloudflare Worker unavailable (HTTP {status_code})")
-            image_provider_health_manager.record_failure(
-                cls.PROVIDER_NAME,
+            cls._record_failure(
                 reason=f"HTTP {status_code}",
                 status_code=status_code,
             )

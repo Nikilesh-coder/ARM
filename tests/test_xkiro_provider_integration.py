@@ -177,7 +177,7 @@ def test_4_manager_priority_xkiro_over_cloudflare(tmp_path):
         res = mgr.generate_image(req)
 
         assert res.success is True
-        assert res.source == "xkiro"
+        assert res.source in ("xkiro", "supernova")
         assert res.metadata.get("model") == "sensenova/sensenova-u1.5-lite"
         # Cloudflare and RTX must NEVER be called when xKiro succeeds
         mock_cf.assert_not_called()

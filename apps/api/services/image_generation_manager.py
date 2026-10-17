@@ -490,9 +490,11 @@ class ImageGenerationManager:
         if not CloudflareImageProvider.is_configured():
             provider_diagnostics.append("Cloudflare: not configured")
             logger.info("[ARM IMAGE MANAGER] Cloudflare (Worker / Direct) is not configured. Continuing fallback...")
-        elif not image_provider_health_manager.is_available("cloudflare"):
-            rec = image_provider_health_manager._get_record("cloudflare")
-            cd_diag = f"Cloudflare: in cooldown ({rec.failure_reason or 'rate limited / daily quota exhausted'})"
+        elif not CloudflareImageProvider.is_available():
+            rec_w = image_provider_health_manager._get_record("cloudflare_worker")
+            rec_d = image_provider_health_manager._get_record("cloudflare_direct")
+            cd_reason = rec_w.failure_reason or rec_d.failure_reason or "rate limited / daily quota exhausted"
+            cd_diag = f"Cloudflare: in cooldown ({cd_reason})"
             provider_diagnostics.append(cd_diag)
             logger.info(f"[ARM IMAGE MANAGER] {cd_diag}. Continuing fallback...")
         else:
@@ -513,8 +515,11 @@ class ImageGenerationManager:
                         return res
                     provider_diagnostics.append("Cloudflare: duplicate image rejected")
                 else:
-                    rec = image_provider_health_manager._get_record("cloudflare")
-                    fail_diag = f"Cloudflare: {rec.failure_reason or 'worker/direct returned empty response'}"
+                    rec_w = image_provider_health_manager._get_record("cloudflare_worker")
+                    rec_d = image_provider_health_manager._get_record("cloudflare_direct")
+                    rec_c = image_provider_health_manager._get_record("cloudflare")
+                    fail_reason = rec_d.failure_reason or rec_w.failure_reason or rec_c.failure_reason or 'worker/direct returned empty response'
+                    fail_diag = f"Cloudflare: {fail_reason}"
                     provider_diagnostics.append(fail_diag)
                     logger.warning(f"[ARM IMAGE MANAGER] Priority 2 ({fail_diag}). Continuing fallback...")
             except Exception as e:

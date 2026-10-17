@@ -248,7 +248,14 @@ class DocxTemplateReplacementEngine(BaseReplacementEngine):
                 rel_id = im.get("rel_id")
                 fname = im.get("filename")
                 if action == "replace":
-                    img_src = image_assets.get(arm_img_f) or field_values.get(arm_img_f)
+                    img_src = (
+                        image_assets.get(arm_img_f)
+                        or (fname and image_assets.get(fname))
+                        or (rel_id and image_assets.get(rel_id))
+                        or (fname and image_assets.get(os.path.basename(fname)))
+                        or field_values.get(arm_img_f)
+                        or (fname and field_values.get(fname))
+                    )
                     if isinstance(img_src, dict):
                         img_src = img_src.get("storage_path") or img_src.get("file_path") or img_src.get("url")
 

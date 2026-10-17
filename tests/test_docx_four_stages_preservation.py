@@ -132,16 +132,7 @@ def test_stage_a_exact_copy(master_college_docx_with_borders_and_logo):
     orig_size = len(orig_bytes)
 
     job = replacement_engine_service.execute_replacement(
-        project_data={
-            "title": "Master Template Copy",
-            "no_changes": True,
-        },
-        user_instructions="Do not replace or modify anything in the template.",
-    )
-
-    # Point to the actual template path tested
-    # Re-run directly passing custom template path via job_record
-    job = replacement_engine_service.execute_replacement(
+        template_id=tpl_path,
         project_data={
             "title": "Do not replace or modify anything in the template.",
             "no_changes": True,
